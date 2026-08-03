@@ -178,6 +178,11 @@ var gatewayState = struct {
 	items  map[string]gatewayRecord
 }{items: make(map[string]gatewayRecord)}
 
+var routeProgress = struct {
+	sync.RWMutex
+	items map[string]string
+}{items: make(map[string]string)}
+
 var otpRequests = struct {
 	sync.RWMutex
 	names map[string]bool
@@ -1110,7 +1115,9 @@ func restoreHealthyRoutes() {
 		if err != nil {
 			continue
 		}
-		_ = activateProfileRoutes(config, port)
+		if activateProfileRoutes(config, port) == nil {
+			setRouteStatus(config.Name, "ready")
+		}
 	}
 }
 
@@ -1126,6 +1133,7 @@ type profileView struct {
 	TwoFactor     bool   `json:"twoFactor"`
 	AutoReconnect bool   `json:"autoReconnect"`
 	NeedsOTP      bool   `json:"needsOtp"`
+	RouteStatus   string `json:"routeStatus"`
 }
 
 func handleProfilesAPI(response http.ResponseWriter, _ *http.Request) {
@@ -1148,6 +1156,7 @@ func handleProfilesAPI(response http.ResponseWriter, _ *http.Request) {
 			TwoFactor:     config.TwoFactor,
 			AutoReconnect: config.AutoReconnect,
 			NeedsOTP:      needsOTP,
+			RouteStatus:   currentRouteStatus(config.Name),
 		})
 	}
 	response.Header().Set("Content-Type", "application/json")
@@ -1219,15 +1228,22 @@ func handleActionAPI(response http.ResponseWriter, request *http.Request) {
 		delete(otpRequests.names, selected.Name)
 		otpRequests.Unlock()
 		_ = setSystemRoutes(containerName(selected.Name), "", "", false)
+		setRouteStatus(selected.Name, "")
 		err = disconnectVPN(containerName(selected.Name))
 		if err == nil {
 			recordHistory(selected.Name, "disconnected")
 		}
 	case "route":
+		setRouteStatus(selected.Name, "adding")
 		var port string
 		port, err = proxyPort(containerName(selected.Name))
 		if err == nil {
 			err = activateProfileRoutes(*selected, port)
+		}
+		if err == nil {
+			setRouteStatus(selected.Name, "ready")
+		} else {
+			setRouteStatus(selected.Name, "failed")
 		}
 	case "delete":
 		_ = setSystemRoutes(containerName(selected.Name), "", "", false)
@@ -1485,6 +1501,22 @@ func gatewayStatePath() string {
 	return filepath.Join(filepath.Dir(configPath), "gateway-state.json")
 }
 
+func setRouteStatus(name, status string) {
+	routeProgress.Lock()
+	defer routeProgress.Unlock()
+	if status == "" {
+		delete(routeProgress.items, name)
+	} else {
+		routeProgress.items[name] = status
+	}
+}
+
+func currentRouteStatus(name string) string {
+	routeProgress.RLock()
+	defer routeProgress.RUnlock()
+	return routeProgress.items[name]
+}
+
 func loadGatewayStateLocked() {
 	if gatewayState.loaded {
 		return
@@ -1606,19 +1638,29 @@ func connectVPNWithFailover(config VPNConfig, exhaustive bool) error {
 		attempt.Host = gateway
 		err := connectVPN(attempt)
 		if err == nil {
+			setRouteStatus(config.Name, "waiting")
+			time.Sleep(3 * time.Second)
+			if !containerHealthy(containerName(config.Name)) {
+				setRouteStatus(config.Name, "")
+				return fmt.Errorf("VPN connection was cancelled before routes were added")
+			}
+			setRouteStatus(config.Name, "adding")
 			port, portErr := proxyPort(containerName(config.Name))
 			if portErr == nil {
 				portErr = activateProfileRoutes(attempt, port)
 			}
 			if portErr == nil {
 				setGatewayResult(config, gateway, true, false)
+				setRouteStatus(config.Name, "ready")
 				return nil
 			}
+			setRouteStatus(config.Name, "failed")
 			err = portErr
 		}
 		errors = append(errors, gateway+": "+err.Error())
 		setGatewayResult(config, gateway, false, exhaustive)
 	}
+	setRouteStatus(config.Name, "failed")
 	return fmt.Errorf("all VPN gateway attempts failed: %s", strings.Join(errors, " | "))
 }
 

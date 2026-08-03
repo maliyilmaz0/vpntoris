@@ -24,6 +24,14 @@
 "Submit OTP" = "OTP Gönder";
 "2FA / OTP code" = "2FA / OTP kodu";
 "Use Routes" = "Rotaları Kullan";
+"Reapply Routes" = "Rotaları Yeniden Uygula";
+"VPN connected · routes will be added in 3 seconds" = "VPN bağlandı · rotalar 3 saniye içinde eklenecek";
+"Adding routes…" = "Rotalar ekleniyor…";
+"Routes active" = "Rotalar aktif";
+"Routes could not be added" = "Rotalar eklenemedi";
+"FortiGate SSL VPN" = "FortiGate SSL VPN";
+"FortiGate IPsec" = "FortiGate IPsec";
+"GlobalProtect / OpenConnect" = "GlobalProtect / OpenConnect";
 "Logs" = "Loglar";
 "Edit" = "Düzenle";
 "Delete" = "Sil";

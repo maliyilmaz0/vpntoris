@@ -19,6 +19,7 @@ The user interface is a native SwiftUI tray app. A local Go service manages Dock
 - Ordered primary/backup gateways with negotiation-based failover and persisted active endpoint
 - Fortinet SSL VPN (`openfortivpn`), FortiClient-compatible IPsec, OpenConnect and OpenVPN profiles
 - IKEv1/IKEv2, Main/Aggressive mode, XAuth/EAP, Mode Config, NAT-T, DPD, Phase 1/2 proposals, PFS and common encryption/DH groups
+- Explicit IPsec DH Group 20 (`ECP-384`) support for FortiClient-compatible profiles
 - Inline OTP flow after negotiation starts, including cancel/retry controls
 - Live per-profile traffic counters, transfer rates and connection history
 - Persistent hourly/daily traffic analytics, reconnect totals, destinations and process rankings
@@ -54,6 +55,15 @@ VPNToris checks Docker automatically when it opens. If Docker Desktop is missing
 5. Add a profile, enter one or more destination networks in CIDR form (for example `10.38.0.0/16, 10.68.236.0/24`) and connect.
 
 Only the configured destinations go through a VPN. Normal internet traffic keeps using the Mac's existing default route. When private networks overlap, macOS selects the most specific matching route; avoid assigning the same prefix to two active profiles unless that is intentional.
+
+After the VPN tunnel becomes healthy, VPNToris waits three seconds and installs the profile's routes automatically. The profile card shows **Routes will be added**, **Adding routes** and **Routes active** states. **Reapply Routes** remains available for manual recovery.
+
+## Protocol compatibility status
+
+- FortiGate SSL VPN and FortiClient-compatible IPsec are the currently exercised connection paths.
+- IPsec includes DH Group 20 (`ECP-384`) in both Phase 1 and PFS/Phase 2 selections.
+- Palo Alto GlobalProtect support is implemented through OpenConnect but has not yet been tested end to end against a GlobalProtect gateway.
+- OpenVPN profile import and connection support are implemented but have not yet been tested end to end against a production OpenVPN gateway.
 
 ## OTP / 2FA
 
@@ -115,6 +125,8 @@ Install Xcode Command Line Tools, Go, Docker Desktop and Xcode:
 xcode-select --install
 brew install go
 ```
+
+The current source targets Go `1.26.5` and tun2socks `v2.7.0`, the latest stable versions resolved when this release branch was prepared.
 
 Build and test the source:
 

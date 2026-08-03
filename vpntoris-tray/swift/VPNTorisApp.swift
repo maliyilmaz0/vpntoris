@@ -73,6 +73,7 @@ struct ProfileStatus: Codable, Identifiable {
     let twoFactor: Bool
     let autoReconnect: Bool
     let needsOtp: Bool
+    let routeStatus: String
 }
 
 struct ActiveRoute: Codable, Identifiable { var id: String { profile + cidr }; let profile: String; let cidr: String; let port: String }
@@ -448,7 +449,7 @@ struct ProfileEditor: View {
         ScrollView { VStack(alignment: .leading, spacing: 14) {
             Text(title).font(.title2.bold())
             TextField("Profile name", text: $profile.name)
-            Picker("VPN type", selection: $profile.type) { Text("FortiVPN SSL").tag("openfortivpn"); Text("FortiClient IPsec").tag("ipsec"); Text("OpenConnect").tag("openconnect"); Text("OpenVPN").tag("openvpn") }
+            Picker("VPN type", selection: $profile.type) { Text("FortiGate SSL VPN").tag("openfortivpn"); Text("FortiGate IPsec").tag("ipsec"); Text("GlobalProtect / OpenConnect").tag("openconnect"); Text("OpenVPN").tag("openvpn") }
             HStack { TextField("Host", text: $profile.host); TextField("Port", text: $profile.port).frame(width: 80) }
             TextField("Backup gateways, one per line", text: Binding(get: { profile.backupGateways ?? "" }, set: { profile.backupGateways = $0 }), axis: .vertical).lineLimit(2...4)
             Stepper("Switch gateway after \(profile.failoverThreshold ?? 2) failed reconnect attempts", value: Binding(get: { max(profile.failoverThreshold ?? 2, 1) }, set: { profile.failoverThreshold = $0 }), in: 1...10)
@@ -576,12 +577,12 @@ struct ContentView: View {
                 }.padding(10).background(.orange.opacity(0.12))
             }
             if !store.error.isEmpty { Text(store.error).font(.caption).foregroundStyle(.red).padding(10) }
-            ScrollView {
-                LazyVStack(spacing: 10) {
-                    ForEach(store.profiles) { profile in
+            List {
+                ForEach(store.profiles) { profile in
                         VStack(alignment: .leading, spacing: 10) {
                             HStack {
-                                VStack(alignment: .leading, spacing: 3) { Text(profile.name).font(.headline); Text("\(profile.type) · \(profile.activeGateway)").font(.caption).foregroundStyle(.secondary); if profile.gatewayCount > 1 { Text("Gateway failover · \(profile.gatewayCount) endpoints").font(.caption2).foregroundStyle(.orange) } }
+                                Image(systemName: profileTypeIcon(profile.type)).font(.title3).foregroundStyle(profile.connected ? .green : .secondary).frame(width: 28)
+                                VStack(alignment: .leading, spacing: 3) { Text(profile.name).font(.headline); Text("\(profileTypeName(profile.type)) · \(profile.activeGateway)").font(.caption).foregroundStyle(.secondary); if profile.gatewayCount > 1 { Text("Gateway failover · \(profile.gatewayCount) endpoints").font(.caption2).foregroundStyle(.orange) } }
                                 Spacer()
                                 if store.busy.contains(profile.name) && !profile.connected {
                                     ProgressView().controlSize(.small)
@@ -606,6 +607,10 @@ struct ContentView: View {
                                 }
                             }
                             Label(profile.routes.isEmpty ? "No routes configured" : profile.routes, systemImage: "point.3.connected.trianglepath.dotted").font(.caption).foregroundStyle(.cyan)
+                            if profile.routeStatus == "waiting" { Label("VPN connected · routes will be added in 3 seconds", systemImage: "timer").font(.caption).foregroundStyle(.orange) }
+                            if profile.routeStatus == "adding" { HStack { ProgressView().controlSize(.small); Text("Adding routes…").font(.caption) }.foregroundStyle(.orange) }
+                            if profile.routeStatus == "ready" && profile.connected { Label("Routes active", systemImage: "checkmark.circle.fill").font(.caption).foregroundStyle(.green) }
+                            if profile.routeStatus == "failed" { Label("Routes could not be added", systemImage: "exclamationmark.triangle.fill").font(.caption).foregroundStyle(.red) }
                             if profile.connected, let traffic = store.traffic[profile.name] {
                                 HStack(spacing: 12) {
                                     Label(byteRate(traffic.receiveBps), systemImage: "arrow.down").foregroundStyle(.green)
@@ -627,14 +632,13 @@ struct ContentView: View {
                                 }.padding(10).background(.orange.opacity(0.10), in: RoundedRectangle(cornerRadius: 9))
                             }
                             HStack {
-                                if profile.connected { Button("Use Routes") { Task { await store.action("route", name: profile.name) } } }
+                                if profile.connected { Button("Reapply Routes") { Task { await store.action("route", name: profile.name) } } }
                                 Button("Logs") { diagnostics = .logs(profile.name) }; Button("Edit") { oldName = profile.name; editing = store.storedProfile(named: profile.name) }
-                                Spacer(); Button("Delete", role: .destructive) { deleting = profile }
+                                Spacer()
                             }.buttonStyle(.borderless)
-                        }.padding(14).background(.thinMaterial, in: RoundedRectangle(cornerRadius: 14))
-                    }
-                }.padding(14)
-            }
+                        }.padding(14).background(.thinMaterial, in: RoundedRectangle(cornerRadius: 14)).listRowInsets(EdgeInsets(top: 5, leading: 14, bottom: 5, trailing: 14)).listRowSeparator(.hidden).listRowBackground(Color.clear).swipeActions(edge: .trailing, allowsFullSwipe: false) { Button("Delete", role: .destructive) { deleting = profile }.tint(.red) }
+                }
+            }.listStyle(.plain).scrollContentBackground(.hidden).animation(.easeInOut(duration: 0.25), value: store.profiles.map(\.name))
             Divider(); HStack { Circle().fill(store.docker.state == "ready" ? Color.green : Color.orange).frame(width: 7); Text(store.docker.state == "ready" ? "Docker ready" : "Docker unavailable").font(.caption).foregroundStyle(.secondary); Text("v\(updater.currentVersion)").font(.caption.monospacedDigit()).foregroundStyle(.tertiary).help("VPNToris version \(updater.currentVersion)"); Spacer(); Button("Touch ID") { showTouchIDHelp = true }.buttonStyle(.borderless); Button("Quit") { NSApplication.shared.terminate(nil) }.buttonStyle(.borderless) }.padding(12)
         }.frame(width: 410, height: 560).task {
             store.migrateLegacyCredentials()
@@ -687,6 +691,9 @@ struct ContentView: View {
         default: return "Checking Docker"
         }
     }
+
+    private func profileTypeName(_ type: String) -> String { switch type { case "openfortivpn": return "FortiGate SSL VPN"; case "ipsec": return "FortiGate IPsec"; case "openconnect": return "GlobalProtect / OpenConnect"; case "openvpn": return "OpenVPN"; default: return "VPN" } }
+    private func profileTypeIcon(_ type: String) -> String { switch type { case "ipsec": return "lock.shield.fill"; case "openconnect": return "network.badge.shield.half.filled"; case "openvpn": return "point.3.connected.trianglepath.dotted"; default: return "shield.lefthalf.filled" } }
 
     private func byteRate(_ value: Double) -> String { ByteCountFormatter.string(fromByteCount: Int64(value), countStyle: .file) + "/s" }
     private func byteCount(_ value: UInt64) -> String { ByteCountFormatter.string(fromByteCount: Int64(value), countStyle: .file) }

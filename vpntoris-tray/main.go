@@ -82,6 +82,12 @@ var proxyState = struct {
 	revision uint64
 }{mappings: make(map[string]proxyMapping)}
 
+var dockerBootstrap = struct {
+	sync.RWMutex
+	State   string `json:"state"`
+	Message string `json:"message"`
+}{State: "checking", Message: "Checking Docker…"}
+
 type proxyMapping struct {
 	port   string
 	routes []proxyRoute
@@ -107,6 +113,7 @@ func main() {
 	if err := startPACServer(); err != nil {
 		os.Exit(1)
 	}
+	go bootstrapDockerImage()
 	go restoreHealthyRoutes()
 	if len(os.Args) > 2 && os.Args[1] == "--daemon" {
 		if parentPID, err := strconv.Atoi(os.Args[2]); err == nil {
@@ -121,6 +128,66 @@ func main() {
 		}
 	}
 	select {}
+}
+
+func dockerPath() string {
+	if path, err := exec.LookPath("docker"); err == nil {
+		return path
+	}
+	for _, path := range []string{"/usr/local/bin/docker", "/opt/homebrew/bin/docker", "/Applications/Docker.app/Contents/Resources/bin/docker"} {
+		if info, err := os.Stat(path); err == nil && !info.IsDir() {
+			return path
+		}
+	}
+	return ""
+}
+
+func setDockerBootstrap(state, message string) {
+	dockerBootstrap.Lock()
+	dockerBootstrap.State = state
+	dockerBootstrap.Message = message
+	dockerBootstrap.Unlock()
+}
+
+func bootstrapDockerImage() {
+	docker := dockerPath()
+	if docker == "" {
+		setDockerBootstrap("missing", "Docker Desktop is not installed.")
+		return
+	}
+	if output, err := exec.Command(docker, "info", "--format", "{{.ServerVersion}}").CombinedOutput(); err != nil {
+		message := strings.TrimSpace(string(output))
+		if message == "" {
+			message = "Docker Desktop is installed but the engine is not running."
+		}
+		setDockerBootstrap("stopped", message)
+		return
+	}
+	if exec.Command(docker, "image", "inspect", imageName).Run() == nil {
+		setDockerBootstrap("ready", "Docker image is ready.")
+		return
+	}
+	executable, err := os.Executable()
+	if err != nil {
+		setDockerBootstrap("error", err.Error())
+		return
+	}
+	contextPath := filepath.Clean(filepath.Join(filepath.Dir(executable), "..", "Resources", "DockerContext"))
+	if _, err := os.Stat(filepath.Join(contextPath, "Dockerfile")); err != nil {
+		setDockerBootstrap("error", "The embedded Docker build context is missing.")
+		return
+	}
+	setDockerBootstrap("building", "Building the VPN client image for the first time…")
+	output, err := exec.Command(docker, "build", "-t", imageName, contextPath).CombinedOutput()
+	if err != nil {
+		message := strings.TrimSpace(string(output))
+		if message == "" {
+			message = err.Error()
+		}
+		setDockerBootstrap("error", message)
+		return
+	}
+	setDockerBootstrap("ready", "Docker image is ready.")
 }
 
 func proxyPort(container string) (string, error) {
@@ -299,6 +366,7 @@ func startPACServer() error {
 	mux.HandleFunc("/api/action", handleActionAPI)
 	mux.HandleFunc("/api/logs", handleLogsAPI)
 	mux.HandleFunc("/api/routes", handleRoutesAPI)
+	mux.HandleFunc("/api/docker", handleDockerAPI)
 	mux.HandleFunc("/proxy.pac", func(response http.ResponseWriter, _ *http.Request) {
 		proxyState.RLock()
 		type pacRoute struct {
@@ -332,6 +400,25 @@ func startPACServer() error {
 	go func() { _ = http.Serve(listener, mux) }()
 	go monitorActiveProxy()
 	return nil
+}
+
+func handleDockerAPI(response http.ResponseWriter, request *http.Request) {
+	if request.Method == http.MethodPost {
+		dockerBootstrap.RLock()
+		state := dockerBootstrap.State
+		dockerBootstrap.RUnlock()
+		if state != "building" {
+			go bootstrapDockerImage()
+		}
+	}
+	dockerBootstrap.RLock()
+	status := struct {
+		State   string `json:"state"`
+		Message string `json:"message"`
+	}{dockerBootstrap.State, dockerBootstrap.Message}
+	dockerBootstrap.RUnlock()
+	response.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(response).Encode(status)
 }
 
 func monitorActiveProxy() {
@@ -447,6 +534,10 @@ func handleActionAPI(response http.ResponseWriter, request *http.Request) {
 		if err == nil {
 			err = setSystemRoutes(containerName(selected.Name), port, selected.Routes, true)
 		}
+	case "delete":
+		_ = setSystemRoutes(containerName(selected.Name), "", "", false)
+		_ = disconnectVPN(containerName(selected.Name))
+		err = deleteConfig(selected.Name)
 
 	default:
 		http.Error(response, "unknown action", http.StatusBadRequest)
@@ -522,6 +613,24 @@ func loadConfigs() ([]VPNConfig, error) {
 		return nil, err
 	}
 	return configs, nil
+}
+
+func deleteConfig(name string) error {
+	configs, err := loadConfigs()
+	if err != nil {
+		return err
+	}
+	filtered := make([]VPNConfig, 0, len(configs))
+	for _, config := range configs {
+		if config.Name != name {
+			filtered = append(filtered, config)
+		}
+	}
+	data, err := json.MarshalIndent(filtered, "", "  ")
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(configPath, data, 0600)
 }
 
 func containerName(name string) string {

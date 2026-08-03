@@ -28,23 +28,19 @@ The user interface is a native SwiftUI tray app. A local Go service manages Dock
 
 - Apple Silicon Mac (`arm64`)
 - macOS 13 Ventura or later
-- [Docker Desktop for Mac](https://www.docker.com/products/docker-desktop/) running before the first connection
+- [Docker Desktop for Mac](https://www.docker.com/products/docker-desktop/)
 - An administrator account for the one-time route-helper installation
 - Network access to the VPN gateway; IPsec commonly requires outbound UDP 500 and 4500
 - VPN credentials, remote gateway and the private CIDR routes supplied by your VPN administrator
 
-The release application contains the macOS binaries, but the VPN client image is built locally. After installing Docker Desktop, run once from the source directory:
-
-```bash
-docker build -t vpntoris-client docker/
-```
+VPNToris checks Docker automatically when it opens. If Docker Desktop is missing or its engine is stopped, the SwiftUI tray displays an installation/startup warning with the appropriate action. When Docker is ready but the `vpntoris-client` image does not exist, VPNToris builds it automatically from the Docker context embedded in the app bundle and displays the build progress. No manual `docker build` command is required.
 
 ## Install
 
 1. Download the notarized DMG from [Releases](https://github.com/maliyilmaz0/vpntoris/releases).
 2. Drag `VPNToris.app` to `Applications`.
-3. Start Docker Desktop and wait until the engine is ready.
-4. Open VPNToris. On the first connection, macOS asks for administrator authorization to install the routing helper.
+3. Open VPNToris. Start Docker Desktop from the warning if it is not already running; VPNToris prepares the VPN image automatically on first launch.
+4. On the first connection, macOS asks for administrator authorization to install the routing helper.
 5. Add a profile, enter one or more destination networks in CIDR form (for example `10.38.0.0/16, 10.68.236.0/24`) and connect.
 
 Only the configured destinations go through a VPN. Normal internet traffic keeps using the Mac's existing default route. When private networks overlap, macOS selects the most specific matching route; avoid assigning the same prefix to two active profiles unless that is intentional.

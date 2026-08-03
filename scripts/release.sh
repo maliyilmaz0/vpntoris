@@ -24,6 +24,8 @@ done
 rm -rf "$BUILD_DIR"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources/Licenses" "$DIST_DIR"
 cp "$ROOT_DIR/vpntoris-tray/Info.plist" "$APP/Contents/Info.plist"
+mkdir -p "$APP/Contents/Resources/DockerContext"
+cp -R "$ROOT_DIR/docker/." "$APP/Contents/Resources/DockerContext/"
 
 export GOCACHE=${GOCACHE:-/tmp/vpntoris-release-go-cache}
 export CLANG_MODULE_CACHE_PATH=${CLANG_MODULE_CACHE_PATH:-/tmp/vpntoris-release-clang-cache}

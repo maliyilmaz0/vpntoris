@@ -87,6 +87,7 @@ struct TrafficStatus: Codable, Identifiable {
 struct HistoryEntry: Codable, Identifiable { let id: String; let profile: String; let event: String; let time: String; let received: UInt64; let sent: UInt64 }
 struct RouteMatch: Codable, Identifiable { var id: String { profile + cidr }; let profile: String; let cidr: String; let prefix: Int; let connected: Bool }
 struct RouteCheck: Codable { let target: String; let matches: [RouteMatch]; let conflict: Bool }
+struct ActiveFlow: Codable, Identifiable { let id: String; let profile: String; let process: String; let pid: Int; let local: String; let remote: String; let remoteIp: String; let port: Int; let `protocol`: String }
 
 struct BrandIcon: View {
     let size: CGFloat
@@ -364,6 +365,7 @@ struct ContentView: View {
     @State private var diagnostics: DiagnosticsTarget?
     @State private var showHistory = false
     @State private var showRouteTest = false
+    @State private var showFlows = false
     @State private var pendingOTP: Set<String> = []
     @State private var submittedOTP: Set<String> = []
     @State private var otpCodes: [String: String] = [:]
@@ -373,7 +375,7 @@ struct ContentView: View {
             HStack {
                 BrandIcon(size: 38)
                 VStack(alignment: .leading) { Text("VPNToris").font(.title2.bold()); Text("Private routes, isolated tunnels").font(.caption).foregroundStyle(.secondary) }
-                Spacer(); Button("Routes") { diagnostics = .routes }.buttonStyle(.bordered); Button { showHistory = true } label: { Image(systemName: "clock.arrow.circlepath") }.buttonStyle(.bordered); Button { showRouteTest = true } label: { Image(systemName: "scope") }.buttonStyle(.bordered); Button { oldName = nil; editing = VPNProfile() } label: { Image(systemName: "plus") }.buttonStyle(.bordered)
+                Spacer(); Button("Routes") { diagnostics = .routes }.buttonStyle(.bordered); Button { showFlows = true } label: { Image(systemName: "point.3.filled.connected.trianglepath.dotted") }.buttonStyle(.bordered); Button { showHistory = true } label: { Image(systemName: "clock.arrow.circlepath") }.buttonStyle(.bordered); Button { showRouteTest = true } label: { Image(systemName: "scope") }.buttonStyle(.bordered); Button { oldName = nil; editing = VPNProfile() } label: { Image(systemName: "plus") }.buttonStyle(.bordered)
             }.padding(18)
             Divider()
             if store.docker.state != "ready" {
@@ -482,6 +484,7 @@ struct ContentView: View {
         .sheet(item: $diagnostics) { target in DiagnosticsView(store: store, target: target) }
         .sheet(isPresented: $showHistory) { HistoryView() }
         .sheet(isPresented: $showRouteTest) { RouteTestView() }
+        .sheet(isPresented: $showFlows) { ActiveFlowsView() }
         .alert("Delete \(deleting?.name ?? "profile")?", isPresented: Binding(get: { deleting != nil }, set: { if !$0 { deleting = nil } })) {
             Button("Cancel", role: .cancel) { deleting = nil }
             Button("Delete", role: .destructive) { if let p = deleting { store.deleteCredentials(named: p.name); Task { await store.action("delete", name: p.name) } }; deleting = nil }
@@ -524,6 +527,20 @@ struct ContentView: View {
         pendingOTP.remove(profile.name); submittedOTP.remove(profile.name); otpCodes[profile.name] = ""
         Task { await store.action("disconnect", name: profile.name) }
     }
+}
+
+struct ActiveFlowsView: View {
+    @Environment(\.dismiss) private var dismiss
+    @State private var flows: [ActiveFlow] = []
+    var body: some View {
+        VStack(spacing: 12) {
+            HStack { Text("Active VPN Connections").font(.title2.bold()); Text("Process → destination").font(.caption).foregroundStyle(.secondary); Spacer(); Button("Done") { dismiss() } }
+            if flows.isEmpty { VStack(spacing: 10) { Image(systemName: "network.slash").font(.largeTitle); Text("No active VPN flows").font(.headline); Text("Start an SSH, browser or database connection through a configured route.").foregroundStyle(.secondary) }.frame(maxWidth: .infinity, maxHeight: .infinity) }
+            else { List(flows) { flow in HStack(spacing: 12) { Image(systemName: icon(flow.process)).frame(width: 24).foregroundStyle(.cyan); VStack(alignment: .leading, spacing: 3) { Text(flow.process).font(.headline); Text("PID \(flow.pid) · \(flow.protocol)").font(.caption).foregroundStyle(.secondary) }; Spacer(); VStack(alignment: .trailing, spacing: 3) { Text(flow.remote).font(.system(.body, design: .monospaced)); Text(flow.profile).font(.caption).foregroundStyle(.orange) } } } }
+        }.padding(18).frame(width: 680, height: 460).task { while !Task.isCancelled { await load(); try? await Task.sleep(for: .seconds(2)) } }
+    }
+    private func load() async { if let url = URL(string: "http://127.0.0.1:17984/api/flows"), let (data, _) = try? await URLSession.shared.data(from: url) { flows = (try? JSONDecoder().decode([ActiveFlow].self, from: data)) ?? [] } }
+    private func icon(_ process: String) -> String { let value = process.lowercased(); if value.contains("ssh") { return "terminal" }; if value.contains("code") { return "chevron.left.forwardslash.chevron.right" }; if value.contains("browser") || value.contains("safari") { return "globe" }; return "app.connected.to.app.below.fill" }
 }
 
 struct HistoryView: View {

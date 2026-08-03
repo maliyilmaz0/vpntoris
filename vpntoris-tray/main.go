@@ -111,6 +111,18 @@ type historyEntry struct {
 	Sent     uint64 `json:"sent"`
 }
 
+type activeFlow struct {
+	ID       string `json:"id"`
+	Profile  string `json:"profile"`
+	Process  string `json:"process"`
+	PID      int    `json:"pid"`
+	Local    string `json:"local"`
+	Remote   string `json:"remote"`
+	RemoteIP string `json:"remoteIp"`
+	Port     int    `json:"port"`
+	Protocol string `json:"protocol"`
+}
+
 var trafficState = struct {
 	sync.RWMutex
 	items map[string]trafficSnapshot
@@ -486,6 +498,7 @@ func startPACServer() error {
 	mux.HandleFunc("/api/history", handleHistoryAPI)
 	mux.HandleFunc("/api/route-check", handleRouteCheckAPI)
 	mux.HandleFunc("/api/recover", handleRecoverAPI)
+	mux.HandleFunc("/api/flows", handleFlowsAPI)
 	mux.HandleFunc("/proxy.pac", func(response http.ResponseWriter, _ *http.Request) {
 		proxyState.RLock()
 		type pacRoute struct {
@@ -519,6 +532,82 @@ func startPACServer() error {
 	go func() { _ = http.Serve(listener, mux) }()
 	go monitorActiveProxy()
 	return nil
+}
+
+func handleFlowsAPI(response http.ResponseWriter, _ *http.Request) {
+	output, err := exec.Command("/usr/sbin/lsof", "-nP", "-iTCP", "-sTCP:ESTABLISHED", "-FpcnT").Output()
+	if err != nil {
+		http.Error(response, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	flows := parseFlows(string(output))
+	response.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(response).Encode(flows)
+}
+
+func parseFlows(output string) []activeFlow {
+	configs, _ := loadConfigs()
+	type configuredRoute struct {
+		profile string
+		block   *net.IPNet
+		prefix  int
+	}
+	routes := []configuredRoute{}
+	for _, config := range configs {
+		for _, route := range splitValues(config.Routes) {
+			_, block, err := net.ParseCIDR(route)
+			if err == nil {
+				prefix, _ := block.Mask.Size()
+				routes = append(routes, configuredRoute{config.Name, block, prefix})
+			}
+		}
+	}
+	pid := 0
+	process := ""
+	flows := []activeFlow{}
+	for _, line := range strings.Split(output, "\n") {
+		if len(line) < 2 {
+			continue
+		}
+		switch line[0] {
+		case 'p':
+			pid, _ = strconv.Atoi(line[1:])
+		case 'c':
+			process = line[1:]
+		case 'n':
+			connection := line[1:]
+			parts := strings.Split(connection, "->")
+			if len(parts) != 2 {
+				continue
+			}
+			remoteHost, remotePort, err := net.SplitHostPort(parts[1])
+			if err != nil {
+				continue
+			}
+			remoteIP := net.ParseIP(strings.Trim(remoteHost, "[]"))
+			if remoteIP == nil {
+				continue
+			}
+			bestProfile, bestPrefix := "", -1
+			for _, route := range routes {
+				if route.block.Contains(remoteIP) && route.prefix > bestPrefix {
+					bestProfile, bestPrefix = route.profile, route.prefix
+				}
+			}
+			if bestProfile == "" {
+				continue
+			}
+			port, _ := strconv.Atoi(remotePort)
+			flows = append(flows, activeFlow{ID: fmt.Sprintf("%d-%s", pid, parts[1]), Profile: bestProfile, Process: process, PID: pid, Local: parts[0], Remote: parts[1], RemoteIP: remoteIP.String(), Port: port, Protocol: "TCP"})
+		}
+	}
+	sort.Slice(flows, func(i, j int) bool {
+		if flows[i].Profile == flows[j].Profile {
+			return flows[i].Process < flows[j].Process
+		}
+		return flows[i].Profile < flows[j].Profile
+	})
+	return flows
 }
 
 func handleRecoverAPI(response http.ResponseWriter, request *http.Request) {

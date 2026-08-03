@@ -638,7 +638,7 @@ struct ContentView: View {
                             }.buttonStyle(.borderless)
                         }.padding(14).background(.thinMaterial, in: RoundedRectangle(cornerRadius: 14)).listRowInsets(EdgeInsets(top: 5, leading: 14, bottom: 5, trailing: 14)).listRowSeparator(.hidden).listRowBackground(Color.clear).swipeActions(edge: .trailing, allowsFullSwipe: false) { Button(role: .destructive) { deleting = profile } label: { Image(systemName: "trash.fill") }.tint(.red).accessibilityLabel("Delete") }
                 }
-            }.listStyle(.plain).scrollContentBackground(.hidden).animation(.easeInOut(duration: 0.25), value: store.profiles.map(\.name))
+            }.listStyle(.plain).scrollContentBackground(.hidden).padding(.horizontal, 7).animation(.easeInOut(duration: 0.25), value: store.profiles.map(\.name))
             Divider(); HStack { Circle().fill(store.docker.state == "ready" ? Color.green : Color.orange).frame(width: 7); Text(store.docker.state == "ready" ? "Docker ready" : "Docker unavailable").font(.caption).foregroundStyle(.secondary); Text("v\(updater.currentVersion)").font(.caption.monospacedDigit()).foregroundStyle(.tertiary).help("VPNToris version \(updater.currentVersion)"); Spacer(); Button("Touch ID") { showTouchIDHelp = true }.buttonStyle(.borderless); Button("Quit") { NSApplication.shared.terminate(nil) }.buttonStyle(.borderless) }.padding(12)
         }.frame(width: 410, height: 560).task {
             store.migrateLegacyCredentials()

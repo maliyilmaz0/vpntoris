@@ -2,7 +2,7 @@
 set -euo pipefail
 
 ROOT_DIR=$(cd "$(dirname "$0")/.." && pwd)
-VERSION=${VERSION:-1.0.0}
+VERSION=${VERSION:-1.1.0}
 ARCH=${ARCH:-universal}
 APP_NAME=VPNToris
 BUILD_DIR="$ROOT_DIR/build/release"

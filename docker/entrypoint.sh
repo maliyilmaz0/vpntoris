@@ -77,7 +77,7 @@ if [ "$VPN_TYPE" = "ipsec" ]; then
 fi
 for i in {1..30}; do
 	if [ -n "$VPN_IFACE" ]; then break; fi
-    IFACE=$(ip -o addr show | awk '{print $2}' | grep -oE 'ppp[0-9]+|tun[0-9]+' | head -n 1)
+    IFACE=$(ip -o addr show | awk '{print $2}' | grep -oE 'ppp[0-9]+|tun[0-9]+' | head -n 1 || true)
     if [ -n "$IFACE" ]; then
         VPN_IFACE=$IFACE
         echo "Found VPN interface: $VPN_IFACE"

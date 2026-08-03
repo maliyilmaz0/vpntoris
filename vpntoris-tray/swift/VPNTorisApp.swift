@@ -119,6 +119,31 @@ enum AppNotifications {
     }
 }
 
+enum CLIInstaller {
+    static let commandName = "vpntorisctl"
+    static var executable: URL { Bundle.main.bundleURL.appending(path: "Contents/MacOS/vpntorisctl") }
+    static var preferredDirectory: URL {
+        let manager = FileManager.default
+        for path in ["/opt/homebrew/bin", "/usr/local/bin"] where manager.fileExists(atPath: path) && manager.isWritableFile(atPath: path) { return URL(fileURLWithPath: path, isDirectory: true) }
+        return URL(fileURLWithPath: "/usr/local/bin", isDirectory: true)
+    }
+    static var destination: URL { preferredDirectory.appending(path: commandName) }
+    static var terminalCommand: String { "sudo ln -sf \"/Applications/VPNToris.app/Contents/MacOS/vpntorisctl\" \"\(destination.path)\"" }
+    static func installIfPossible() -> String {
+        let manager = FileManager.default
+        guard manager.isWritableFile(atPath: preferredDirectory.path) else { return "Administrator permission is required. Copy the command below into Terminal." }
+        do {
+            if manager.fileExists(atPath: destination.path) {
+                let values = try destination.resourceValues(forKeys: [.isSymbolicLinkKey])
+                guard values.isSymbolicLink == true else { return "A regular file already exists at \(destination.path). It was not changed." }
+                try manager.removeItem(at: destination)
+            }
+            try manager.createSymbolicLink(at: destination, withDestinationURL: executable)
+            return "CLI installed: \(destination.path)"
+        } catch { return "CLI installation failed: \(error.localizedDescription)" }
+    }
+}
+
 struct ReleaseAsset: Codable { let name: String; let browserDownloadUrl: URL; enum CodingKeys: String, CodingKey { case name; case browserDownloadUrl = "browser_download_url" } }
 struct GitHubRelease: Codable { let tagName: String; let name: String?; let htmlUrl: URL; let assets: [ReleaseAsset]; enum CodingKeys: String, CodingKey { case tagName = "tag_name"; case name; case htmlUrl = "html_url"; case assets } }
 
@@ -528,6 +553,7 @@ struct ContentView: View {
     @State private var showNotifications = false
     @State private var showBackup = false
     @State private var showLanguage = false
+    @State private var showHelp = false
     @State private var importError = ""
     @State private var pendingOTP: Set<String> = []
     @State private var submittedOTP: Set<String> = []
@@ -547,6 +573,7 @@ struct ContentView: View {
                     Button("Traffic Analytics", systemImage: "chart.xyaxis.line") { showAnalytics = true }
                     Button("Notifications", systemImage: "bell.badge") { showNotifications = true }
                     Button("Language", systemImage: "character.bubble") { showLanguage = true }
+                    Button("Help and CLI", systemImage: "questionmark.circle") { showHelp = true }
                     Divider()
                     Button("Import VPN Profile…", systemImage: "square.and.arrow.down") { showImporter = true }
                     Button("Backup and Restore…", systemImage: "lock.doc") { showBackup = true }
@@ -672,6 +699,7 @@ struct ContentView: View {
         .sheet(isPresented: $showNotifications) { NotificationSettingsView() }
         .sheet(isPresented: $showBackup) { BackupView(store: store) }
         .sheet(isPresented: $showLanguage) { LanguageSettingsView() }
+        .sheet(isPresented: $showHelp) { HelpView() }
         .fileImporter(isPresented: $showImporter, allowedContentTypes: [.data, .plainText], allowsMultipleSelection: false) { result in
             do { if let url = try result.get().first { oldName = nil; editing = try importedProfile(from: url) } } catch { importError = error.localizedDescription }
         }
@@ -763,6 +791,36 @@ struct ContentView: View {
         pendingOTP.remove(profile.name); submittedOTP.remove(profile.name); otpCodes[profile.name] = ""
         Task { await store.action("disconnect", name: profile.name) }
     }
+}
+
+struct HelpView: View {
+    @Environment(\.dismiss) private var dismiss
+    @State private var status = ""
+    private let commands = [
+        "vpntorisctl status",
+        "vpntorisctl profiles",
+        "vpntorisctl flows",
+        "vpntorisctl routes",
+        "vpntorisctl check-route 10.38.1.251",
+        "VPNTORIS_PASSWORD='…' vpntorisctl connect 'Profile Name'",
+        "VPNTORIS_PASSWORD='…' VPNTORIS_PSK='…' vpntorisctl connect 'IPsec Profile'",
+        "vpntorisctl disconnect 'Profile Name'",
+        "vpntorisctl logs 'Profile Name'"
+    ]
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            HStack { Image(systemName: "terminal.fill").font(.largeTitle).foregroundStyle(.cyan); VStack(alignment: .leading) { Text("Help and CLI").font(.title2.bold()); Text("Control VPNToris from Terminal").foregroundStyle(.secondary) }; Spacer(); Button("Done") { dismiss() } }
+            GroupBox("CLI Installation") { VStack(alignment: .leading, spacing: 9) {
+                Text("VPNToris tries to create the command symlink automatically when it opens. The tray application must be running while vpntorisctl is used.").font(.caption).foregroundStyle(.secondary)
+                Text(CLIInstaller.terminalCommand).font(.system(.caption, design: .monospaced)).textSelection(.enabled).padding(9).background(.quaternary, in: RoundedRectangle(cornerRadius: 7))
+                HStack { Button("Copy Install Command") { copy(CLIInstaller.terminalCommand) }; Button("Install CLI") { status = CLIInstaller.installIfPossible() }.buttonStyle(.borderedProminent); Spacer(); if !status.isEmpty { Text(status).font(.caption).foregroundStyle(status.hasPrefix("CLI installed") ? .green : .orange) } }
+            }.frame(maxWidth: .infinity, alignment: .leading) }
+            Text("Common Commands").font(.headline)
+            ScrollView { VStack(spacing: 7) { ForEach(commands, id: \.self) { command in HStack { Text(command).font(.system(.caption, design: .monospaced)).textSelection(.enabled); Spacer(); Button { copy(command) } label: { Image(systemName: "doc.on.doc") }.buttonStyle(.borderless).help("Copy") }.padding(9).background(.quaternary, in: RoundedRectangle(cornerRadius: 7)) } } }
+            Text("Passwords and pre-shared keys passed through environment variables are sent only to the localhost controller. They are not command-line arguments and are not written into the profile JSON file.").font(.caption).foregroundStyle(.secondary)
+        }.padding(22).frame(width: 680, height: 620).onAppear { status = FileManager.default.fileExists(atPath: CLIInstaller.destination.path) ? "CLI installed: \(CLIInstaller.destination.path)" : "" }
+    }
+    private func copy(_ value: String) { NSPasteboard.general.clearContents(); NSPasteboard.general.setString(value, forType: .string) }
 }
 
 struct LanguageSettingsView: View {
@@ -1046,6 +1104,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory)
+        if Bundle.main.bundlePath.hasPrefix("/Applications/") { _ = CLIInstaller.installIfPossible() }
         UNUserNotificationCenter.current().getNotificationSettings { settings in
             if settings.authorizationStatus == .notDetermined { UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound, .badge]) { _, _ in } }
         }

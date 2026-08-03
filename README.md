@@ -25,12 +25,13 @@ The user interface is a native SwiftUI tray app. A local Go service manages Dock
 - Persistent hourly/daily traffic analytics, reconnect totals, destinations and process rankings
 - Event-specific notification preferences, sounds and quiet hours
 - Active route, per-process connection and container log views
+- Application-aware VPN flow visibility showing process name, PID, protocol, destination and selected profile
 - FortiClient and OpenVPN profile import with review before saving
 - Sanitized diagnostics ZIP export for support and troubleshooting
 - Verified update downloads using the SHA-256 file attached to each GitHub release
 - Secret-free JSON export and optional PBKDF2/AES-256-GCM encrypted profile backups
 - English and Turkish application languages
-- Bundled `vpntorisctl` command-line client
+- Bundled `vpntorisctl` command-line client with automatic symlink installation when the target directory is writable
 - Per-profile edit and delete actions
 - Embedded route helper and `tun2socks`; no separate system extension package
 - Signed and notarized macOS release workflow
@@ -50,7 +51,7 @@ VPNToris checks Docker automatically when it opens. If Docker Desktop is missing
 
 1. Download the notarized DMG from [Releases](https://github.com/maliyilmaz0/vpntoris/releases).
 2. Drag `VPNToris.app` to `Applications`.
-3. Open VPNToris. Start Docker Desktop from the warning if it is not already running; VPNToris prepares the VPN image automatically on first launch.
+3. Open VPNToris. It prepares the VPN image and attempts to install a `vpntorisctl` symlink under `/opt/homebrew/bin` or `/usr/local/bin`. Start Docker Desktop from the warning if it is not already running.
 4. On the first connection, macOS asks for administrator authorization to install the routing helper.
 5. Add a profile, enter one or more destination networks in CIDR form (for example `10.38.0.0/16, 10.68.236.0/24`) and connect.
 
@@ -75,7 +76,8 @@ Enter backup gateway hostnames or IP addresses in the profile editor and choose 
 
 ## Security notes
 
-- Profiles are stored for the current user at `~/Library/Application Support/VPNToris/configs.json` with user-only file permissions. Passwords and pre-shared keys are stored in macOS Keychain and are removed from the profile file.
+- Profiles are stored for the current user at `~/Library/Application Support/VPNToris/configs.json` with user-only file permissions.
+- Passwords and IPsec pre-shared keys are never saved inside the VPN profile JSON. When credentials are remembered, they are stored as separate macOS Keychain items. Saving or exporting an ordinary profile therefore does not embed its password.
 - The local management API listens only on `127.0.0.1:17984`.
 - The privileged helper accepts a limited route start/stop protocol over `/var/run/vpntoris/router.sock` and validates requested CIDRs and ports.
 - Diagnostics export excludes Keychain credentials and container environments, clears legacy credential fields and masks password, secret, PSK, token and OTP patterns in collected output.
@@ -88,18 +90,26 @@ Choose **Import VPN Profile…** from the tray menu to select an OpenVPN `.ovpn`
 
 ## Command line
 
-The application bundle contains `vpntorisctl`. Install a convenient symlink after copying VPNToris to Applications:
+The application bundle contains `vpntorisctl`. On launch, VPNToris automatically creates a symlink in `/opt/homebrew/bin` when that directory is available and writable. Intel/Homebrew installations can use `/usr/local/bin`. Open **Help and CLI** from the tray menu to inspect the installation, copy commands or install the link manually.
 
 ```bash
-sudo ln -sf /Applications/VPNToris.app/Contents/MacOS/vpntorisctl /usr/local/bin/vpntorisctl
+sudo ln -sf "/Applications/VPNToris.app/Contents/MacOS/vpntorisctl" "/usr/local/bin/vpntorisctl"
+vpntorisctl status
 vpntorisctl profiles
-vpntorisctl connect "Profile Name"
 vpntorisctl flows
+vpntorisctl routes
 vpntorisctl check-route 10.38.1.251
+VPNTORIS_PASSWORD='…' vpntorisctl connect "Profile Name"
+VPNTORIS_PASSWORD='…' VPNTORIS_PSK='…' vpntorisctl connect "IPsec Profile"
 vpntorisctl disconnect "Profile Name"
+vpntorisctl logs "Profile Name"
 ```
 
-The tray application must be running because the CLI talks to its localhost controller. Set `VPNTORIS_PASSWORD` when connecting and also set `VPNTORIS_PSK` for a pre-shared-key IPsec profile. Credentials are never accepted as command-line arguments or stored by the CLI.
+The tray application must be running because the CLI talks to its localhost controller. `VPNTORIS_PASSWORD` and `VPNTORIS_PSK` are read from the environment and sent only to the localhost API. They are never accepted as command-line arguments or written into the profile file by the CLI.
+
+## Application-aware traffic visibility
+
+Open **Active Connections** to see which local application is currently producing traffic for a configured VPN destination. Each flow includes the process name, PID, TCP destination, protocol and selected VPN profile. SSH sessions, VS Code Remote connections, browsers and database clients can therefore be associated with the tunnel they are using. **Traffic Analytics** provides longer-term per-profile totals, hourly/daily graphs, reconnect counts and sampled process/destination rankings. VPNToris records connection metadata and counters, not packet payloads or process command-line arguments.
 
 ## Diagnostics
 

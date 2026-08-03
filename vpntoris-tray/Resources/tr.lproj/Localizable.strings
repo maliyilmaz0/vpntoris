@@ -116,3 +116,12 @@
 "Copy Command" = "Komutu Kopyala";
 "Restart VPNToris to apply the language change." = "Dil değişikliğini uygulamak için VPNToris'i yeniden başlatın.";
 "Restart Now" = "Şimdi Yeniden Başlat";
+"Help and CLI" = "Yardım ve CLI";
+"Control VPNToris from Terminal" = "VPNToris'i Terminal'den yönetin";
+"CLI Installation" = "CLI Kurulumu";
+"Copy Install Command" = "Kurulum Komutunu Kopyala";
+"Install CLI" = "CLI'ı Kur";
+"Common Commands" = "Sık Kullanılan Komutlar";
+"Copy" = "Kopyala";
+"VPNToris tries to create the command symlink automatically when it opens. The tray application must be running while vpntorisctl is used." = "VPNToris açıldığında komut symlink'ini otomatik oluşturmayı dener. vpntorisctl kullanılırken tray uygulaması çalışıyor olmalıdır.";
+"Passwords and pre-shared keys passed through environment variables are sent only to the localhost controller. They are not command-line arguments and are not written into the profile JSON file." = "Ortam değişkenleriyle verilen parolalar ve ön paylaşımlı anahtarlar yalnızca localhost controller'a gönderilir. Komut satırı argümanı değildir ve profil JSON dosyasına yazılmaz.";

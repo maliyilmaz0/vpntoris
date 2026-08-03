@@ -36,12 +36,13 @@ RUN apt-get update && apt-get install -y \
 COPY --from=strongswan-builder /src/src/libcharon/plugins/xauth_generic/.libs/libstrongswan-xauth-generic.so /usr/lib/ipsec/plugins/libstrongswan-xauth-generic.so
 
 COPY entrypoint.sh /entrypoint.sh
+COPY healthcheck.sh /healthcheck.sh
 COPY danted.conf.template /etc/danted.conf.template
-RUN chmod +x /entrypoint.sh
+RUN chmod +x /entrypoint.sh /healthcheck.sh
 
 EXPOSE 1080
 
 HEALTHCHECK --interval=2s --timeout=1s --start-period=5s --retries=3 \
-    CMD bash -c '</dev/tcp/127.0.0.1/1080' || exit 1
+    CMD /healthcheck.sh
 
 ENTRYPOINT ["/entrypoint.sh"]

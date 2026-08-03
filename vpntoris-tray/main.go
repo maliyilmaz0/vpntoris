@@ -19,7 +19,7 @@ import (
 	"time"
 )
 
-const imageName = "vpntoris-client:next"
+const imageName = "vpntoris-client:next-2"
 
 var safeNamePattern = regexp.MustCompile(`[^a-z0-9_.-]+`)
 
@@ -28,6 +28,8 @@ type VPNConfig struct {
 	Description     string       `json:"description"`
 	Type            string       `json:"type"`
 	Host            string       `json:"host"`
+	BackupGateways  string       `json:"backupGateways"`
+	FailoverLimit   int          `json:"failoverThreshold"`
 	Port            string       `json:"port"`
 	User            string       `json:"user"`
 	Password        string       `json:"password"`
@@ -125,6 +127,34 @@ type activeFlow struct {
 	Protocol string `json:"protocol"`
 }
 
+type analyticsTraffic struct {
+	Received uint64 `json:"received"`
+	Sent     uint64 `json:"sent"`
+}
+
+type analyticsProfile struct {
+	Name         string                      `json:"name"`
+	Received     uint64                      `json:"received"`
+	Sent         uint64                      `json:"sent"`
+	Reconnects   int                         `json:"reconnects"`
+	Hourly       map[string]analyticsTraffic `json:"hourly"`
+	Daily        map[string]analyticsTraffic `json:"daily"`
+	Destinations map[string]int              `json:"destinations"`
+	Processes    map[string]int              `json:"processes"`
+}
+
+var analyticsState = struct {
+	sync.Mutex
+	loaded   bool
+	lastSave time.Time
+	profiles map[string]*analyticsProfile
+}{profiles: make(map[string]*analyticsProfile)}
+
+type analyticsSettings struct {
+	HourlyDays int `json:"hourlyDays"`
+	DailyDays  int `json:"dailyDays"`
+}
+
 var trafficState = struct {
 	sync.RWMutex
 	items map[string]trafficSnapshot
@@ -136,6 +166,17 @@ var connectionIntent = struct {
 	busy     map[string]bool
 	profiles map[string]VPNConfig
 }{names: make(map[string]bool), busy: make(map[string]bool), profiles: make(map[string]VPNConfig)}
+
+type gatewayRecord struct {
+	Active   string `json:"active"`
+	Failures int    `json:"failures"`
+}
+
+var gatewayState = struct {
+	sync.Mutex
+	loaded bool
+	items  map[string]gatewayRecord
+}{items: make(map[string]gatewayRecord)}
 
 var otpRequests = struct {
 	sync.RWMutex
@@ -170,6 +211,7 @@ func main() {
 	go bootstrapDockerImage()
 	go monitorTraffic()
 	go monitorConnections()
+	go monitorAnalyticsFlows()
 	go restoreHealthyRoutes()
 	if len(os.Args) > 2 && os.Args[1] == "--daemon" {
 		if parentPID, err := strconv.Atoi(os.Args[2]); err == nil {
@@ -502,6 +544,8 @@ func startPACServer() error {
 	mux.HandleFunc("/api/recover", handleRecoverAPI)
 	mux.HandleFunc("/api/flows", handleFlowsAPI)
 	mux.HandleFunc("/api/diagnostics", handleDiagnosticsAPI)
+	mux.HandleFunc("/api/analytics", handleAnalyticsAPI)
+	mux.HandleFunc("/api/analytics-settings", handleAnalyticsSettingsAPI)
 	mux.HandleFunc("/proxy.pac", func(response http.ResponseWriter, _ *http.Request) {
 		proxyState.RLock()
 		type pacRoute struct {
@@ -622,14 +666,185 @@ func sanitizeDiagnosticText(value string) string {
 }
 
 func handleFlowsAPI(response http.ResponseWriter, _ *http.Request) {
-	output, err := exec.Command("/usr/sbin/lsof", "-nP", "-iTCP", "-sTCP:ESTABLISHED", "-FpcnT").Output()
+	flows, err := currentFlows()
 	if err != nil {
 		http.Error(response, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	flows := parseFlows(string(output))
 	response.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(response).Encode(flows)
+}
+
+func currentFlows() ([]activeFlow, error) {
+	output, err := exec.Command("/usr/sbin/lsof", "-nP", "-iTCP", "-sTCP:ESTABLISHED", "-FpcnT").Output()
+	if err != nil {
+		return nil, err
+	}
+	return parseFlows(string(output)), nil
+}
+
+func analyticsPath() string { return filepath.Join(filepath.Dir(configPath), "analytics.json") }
+func analyticsSettingsPath() string {
+	return filepath.Join(filepath.Dir(configPath), "analytics-settings.json")
+}
+
+func loadAnalyticsSettings() analyticsSettings {
+	settings := analyticsSettings{HourlyDays: 7, DailyDays: 90}
+	if data, err := os.ReadFile(analyticsSettingsPath()); err == nil {
+		_ = json.Unmarshal(data, &settings)
+	}
+	if settings.HourlyDays < 1 || settings.HourlyDays > 30 {
+		settings.HourlyDays = 7
+	}
+	if settings.DailyDays < 7 || settings.DailyDays > 365 {
+		settings.DailyDays = 90
+	}
+	return settings
+}
+
+func loadAnalyticsLocked() {
+	if analyticsState.loaded {
+		return
+	}
+	analyticsState.loaded = true
+	data, err := os.ReadFile(analyticsPath())
+	if err == nil {
+		_ = json.Unmarshal(data, &analyticsState.profiles)
+	}
+	if analyticsState.profiles == nil {
+		analyticsState.profiles = make(map[string]*analyticsProfile)
+	}
+}
+
+func analyticsProfileLocked(name string) *analyticsProfile {
+	loadAnalyticsLocked()
+	profile := analyticsState.profiles[name]
+	if profile == nil {
+		profile = &analyticsProfile{Name: name, Hourly: make(map[string]analyticsTraffic), Daily: make(map[string]analyticsTraffic), Destinations: make(map[string]int), Processes: make(map[string]int)}
+		analyticsState.profiles[name] = profile
+	}
+	if profile.Hourly == nil {
+		profile.Hourly = make(map[string]analyticsTraffic)
+	}
+	if profile.Daily == nil {
+		profile.Daily = make(map[string]analyticsTraffic)
+	}
+	if profile.Destinations == nil {
+		profile.Destinations = make(map[string]int)
+	}
+	if profile.Processes == nil {
+		profile.Processes = make(map[string]int)
+	}
+	return profile
+}
+
+func saveAnalyticsLocked(force bool) {
+	if !force && time.Since(analyticsState.lastSave) < 30*time.Second {
+		return
+	}
+	data, err := json.MarshalIndent(analyticsState.profiles, "", "  ")
+	if err == nil {
+		_ = os.WriteFile(analyticsPath(), data, 0600)
+		analyticsState.lastSave = time.Now()
+	}
+}
+
+func recordTrafficAnalytics(name string, received, sent uint64) {
+	if received == 0 && sent == 0 {
+		return
+	}
+	now := time.Now()
+	settings := loadAnalyticsSettings()
+	analyticsState.Lock()
+	defer analyticsState.Unlock()
+	profile := analyticsProfileLocked(name)
+	profile.Received += received
+	profile.Sent += sent
+	hour := now.Format("2006-01-02T15:00:00-07:00")
+	day := now.Format("2006-01-02")
+	hourly := profile.Hourly[hour]
+	hourly.Received += received
+	hourly.Sent += sent
+	profile.Hourly[hour] = hourly
+	daily := profile.Daily[day]
+	daily.Received += received
+	daily.Sent += sent
+	profile.Daily[day] = daily
+	for key := range profile.Hourly {
+		parsed, err := time.Parse("2006-01-02T15:00:00-07:00", key)
+		if err != nil || now.Sub(parsed) > time.Duration(settings.HourlyDays)*24*time.Hour {
+			delete(profile.Hourly, key)
+		}
+	}
+	for key := range profile.Daily {
+		parsed, err := time.Parse("2006-01-02", key)
+		if err != nil || now.Sub(parsed) > time.Duration(settings.DailyDays)*24*time.Hour {
+			delete(profile.Daily, key)
+		}
+	}
+	saveAnalyticsLocked(false)
+}
+
+func recordReconnectAnalytics(name string) {
+	analyticsState.Lock()
+	defer analyticsState.Unlock()
+	analyticsProfileLocked(name).Reconnects++
+	saveAnalyticsLocked(true)
+}
+
+func monitorAnalyticsFlows() {
+	for {
+		time.Sleep(30 * time.Second)
+		flows, err := currentFlows()
+		if err != nil {
+			continue
+		}
+		analyticsState.Lock()
+		for _, flow := range flows {
+			profile := analyticsProfileLocked(flow.Profile)
+			profile.Destinations[flow.RemoteIP]++
+			profile.Processes[flow.Process]++
+		}
+		saveAnalyticsLocked(false)
+		analyticsState.Unlock()
+	}
+}
+
+func handleAnalyticsAPI(response http.ResponseWriter, request *http.Request) {
+	analyticsState.Lock()
+	defer analyticsState.Unlock()
+	loadAnalyticsLocked()
+	if request.Method == http.MethodDelete {
+		analyticsState.profiles = make(map[string]*analyticsProfile)
+		saveAnalyticsLocked(true)
+		response.WriteHeader(http.StatusNoContent)
+		return
+	}
+	profiles := make([]analyticsProfile, 0, len(analyticsState.profiles))
+	for _, profile := range analyticsState.profiles {
+		profiles = append(profiles, *profile)
+	}
+	sort.Slice(profiles, func(i, j int) bool { return profiles[i].Name < profiles[j].Name })
+	response.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(response).Encode(profiles)
+}
+
+func handleAnalyticsSettingsAPI(response http.ResponseWriter, request *http.Request) {
+	settings := loadAnalyticsSettings()
+	if request.Method == http.MethodPost {
+		hourly, _ := strconv.Atoi(request.URL.Query().Get("hourlyDays"))
+		daily, _ := strconv.Atoi(request.URL.Query().Get("dailyDays"))
+		if hourly < 1 || hourly > 30 || daily < 7 || daily > 365 {
+			http.Error(response, "retention values are out of range", http.StatusBadRequest)
+			return
+		}
+		settings = analyticsSettings{HourlyDays: hourly, DailyDays: daily}
+		if data, err := json.MarshalIndent(settings, "", "  "); err == nil {
+			_ = os.WriteFile(analyticsSettingsPath(), data, 0600)
+		}
+	}
+	response.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(response).Encode(settings)
 }
 
 func parseFlows(output string) []activeFlow {
@@ -740,8 +955,11 @@ func monitorTraffic() {
 			if !previous.updatedAt.IsZero() {
 				seconds := now.Sub(previous.updatedAt).Seconds()
 				if seconds > 0 && received >= previous.Received && sent >= previous.Sent {
-					item.ReceiveBPS = float64(received-previous.Received) / seconds
-					item.SendBPS = float64(sent-previous.Sent) / seconds
+					receivedDelta := received - previous.Received
+					sentDelta := sent - previous.Sent
+					item.ReceiveBPS = float64(receivedDelta) / seconds
+					item.SendBPS = float64(sentDelta) / seconds
+					recordTrafficAnalytics(config.Name, receivedDelta, sentDelta)
 				}
 			}
 			trafficState.items[config.Name] = item
@@ -897,14 +1115,17 @@ func restoreHealthyRoutes() {
 }
 
 type profileView struct {
-	Name        string `json:"name"`
-	Description string `json:"description"`
-	Type        string `json:"type"`
-	Host        string `json:"host"`
-	Routes      string `json:"routes"`
-	Connected   bool   `json:"connected"`
-	TwoFactor   bool   `json:"twoFactor"`
-	NeedsOTP    bool   `json:"needsOtp"`
+	Name          string `json:"name"`
+	Description   string `json:"description"`
+	Type          string `json:"type"`
+	Host          string `json:"host"`
+	ActiveHost    string `json:"activeGateway"`
+	GatewayCount  int    `json:"gatewayCount"`
+	Routes        string `json:"routes"`
+	Connected     bool   `json:"connected"`
+	TwoFactor     bool   `json:"twoFactor"`
+	AutoReconnect bool   `json:"autoReconnect"`
+	NeedsOTP      bool   `json:"needsOtp"`
 }
 
 func handleProfilesAPI(response http.ResponseWriter, _ *http.Request) {
@@ -919,12 +1140,14 @@ func handleProfilesAPI(response http.ResponseWriter, _ *http.Request) {
 		otpRequests.RLock()
 		needsOTP := otpRequests.names[config.Name]
 		otpRequests.RUnlock()
+		gateways := gatewayCandidates(config)
 		profiles = append(profiles, profileView{
 			Name: config.Name, Description: config.Description, Type: config.Type,
-			Host: config.Host, Routes: config.Routes,
-			Connected: containerHealthy(containerName(config.Name)),
-			TwoFactor: config.TwoFactor,
-			NeedsOTP:  needsOTP,
+			Host: config.Host, ActiveHost: activeGateway(config), GatewayCount: len(gateways), Routes: config.Routes,
+			Connected:     containerHealthy(containerName(config.Name)),
+			TwoFactor:     config.TwoFactor,
+			AutoReconnect: config.AutoReconnect,
+			NeedsOTP:      needsOTP,
 		})
 	}
 	response.Header().Set("Content-Type", "application/json")
@@ -961,7 +1184,7 @@ func handleActionAPI(response http.ResponseWriter, request *http.Request) {
 		if selected.IPSec != nil {
 			selected.IPSec.PreSharedKey = request.Header.Get("X-VPNToris-PSK")
 		}
-		err = connectVPN(*selected)
+		err = connectVPNWithFailover(*selected, true)
 		if err == nil && selected.AutoReconnect {
 			connectionIntent.Lock()
 			connectionIntent.names[selected.Name] = true
@@ -971,6 +1194,15 @@ func handleActionAPI(response http.ResponseWriter, request *http.Request) {
 		if err == nil {
 			recordHistory(selected.Name, "connected")
 		}
+	case "arm":
+		selected.Password = request.Header.Get("X-VPNToris-Password")
+		if selected.IPSec != nil {
+			selected.IPSec.PreSharedKey = request.Header.Get("X-VPNToris-PSK")
+		}
+		connectionIntent.Lock()
+		connectionIntent.names[selected.Name] = selected.AutoReconnect
+		connectionIntent.profiles[selected.Name] = *selected
+		connectionIntent.Unlock()
 	case "otp":
 		err = sendOTP(*selected, request.Header.Get("X-VPNToris-OTP"))
 		if err == nil {
@@ -1000,6 +1232,7 @@ func handleActionAPI(response http.ResponseWriter, request *http.Request) {
 	case "delete":
 		_ = setSystemRoutes(containerName(selected.Name), "", "", false)
 		_ = disconnectVPN(containerName(selected.Name))
+		deleteGatewayState(selected.Name)
 		err = deleteConfig(selected.Name)
 
 	default:
@@ -1108,12 +1341,13 @@ func monitorConnections() {
 				connectionIntent.busy[config.Name] = true
 				connectionIntent.Unlock()
 				go func(profile VPNConfig) {
+					recordReconnectAnalytics(profile.Name)
 					if profile.TwoFactor {
 						otpRequests.Lock()
 						otpRequests.names[profile.Name] = true
 						otpRequests.Unlock()
 					}
-					err := connectVPN(profile)
+					err := connectVPNWithFailover(profile, false)
 					if err != nil {
 						otpRequests.Lock()
 						delete(otpRequests.names, profile.Name)
@@ -1247,6 +1481,147 @@ func waitForContainerHealthy(name string, timeout time.Duration) error {
 	return fmt.Errorf("VPN tunnel did not become ready before timeout")
 }
 
+func gatewayStatePath() string {
+	return filepath.Join(filepath.Dir(configPath), "gateway-state.json")
+}
+
+func loadGatewayStateLocked() {
+	if gatewayState.loaded {
+		return
+	}
+	gatewayState.loaded = true
+	data, err := os.ReadFile(gatewayStatePath())
+	if err == nil {
+		_ = json.Unmarshal(data, &gatewayState.items)
+	}
+}
+
+func saveGatewayStateLocked() {
+	if data, err := json.MarshalIndent(gatewayState.items, "", "  "); err == nil {
+		_ = os.WriteFile(gatewayStatePath(), data, 0600)
+	}
+}
+
+func deleteGatewayState(name string) {
+	gatewayState.Lock()
+	defer gatewayState.Unlock()
+	loadGatewayStateLocked()
+	delete(gatewayState.items, name)
+	saveGatewayStateLocked()
+}
+
+func gatewayCandidates(config VPNConfig) []string {
+	values := append([]string{strings.TrimSpace(config.Host)}, splitValues(config.BackupGateways)...)
+	seen := map[string]bool{}
+	gateways := make([]string, 0, len(values))
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if value != "" && !seen[value] {
+			seen[value] = true
+			gateways = append(gateways, value)
+		}
+	}
+	return gateways
+}
+
+func validGateway(value string) bool {
+	return regexp.MustCompile(`^[A-Za-z0-9._-]+$`).MatchString(value)
+}
+
+func activeGateway(config VPNConfig) string {
+	gateways := gatewayCandidates(config)
+	if len(gateways) == 0 {
+		return ""
+	}
+	gatewayState.Lock()
+	defer gatewayState.Unlock()
+	loadGatewayStateLocked()
+	record := gatewayState.items[config.Name]
+	for _, gateway := range gateways {
+		if gateway == record.Active {
+			return gateway
+		}
+	}
+	return gateways[0]
+}
+
+func setGatewayResult(config VPNConfig, gateway string, succeeded bool, rotate bool) string {
+	gateways := gatewayCandidates(config)
+	if len(gateways) == 0 {
+		return ""
+	}
+	gatewayState.Lock()
+	defer gatewayState.Unlock()
+	loadGatewayStateLocked()
+	record := gatewayState.items[config.Name]
+	record.Active = gateway
+	if succeeded {
+		record.Failures = 0
+	} else {
+		record.Failures++
+	}
+	limit := config.FailoverLimit
+	if limit < 1 {
+		limit = 2
+	}
+	if rotate || record.Failures >= limit {
+		for index, candidate := range gateways {
+			if candidate == gateway {
+				record.Active = gateways[(index+1)%len(gateways)]
+				break
+			}
+		}
+		record.Failures = 0
+	}
+	gatewayState.items[config.Name] = record
+	saveGatewayStateLocked()
+	return record.Active
+}
+
+func orderedGateways(config VPNConfig) []string {
+	gateways := gatewayCandidates(config)
+	active := activeGateway(config)
+	for index, gateway := range gateways {
+		if gateway == active {
+			return append(append([]string{}, gateways[index:]...), gateways[:index]...)
+		}
+	}
+	return gateways
+}
+
+func connectVPNWithFailover(config VPNConfig, exhaustive bool) error {
+	gateways := orderedGateways(config)
+	if len(gateways) == 0 {
+		return fmt.Errorf("at least one VPN gateway is required")
+	}
+	if !exhaustive {
+		gateways = gateways[:1]
+	}
+	errors := make([]string, 0, len(gateways))
+	for _, gateway := range gateways {
+		if !validGateway(gateway) {
+			return fmt.Errorf("invalid VPN gateway: %s", gateway)
+		}
+		attempt := config
+		attempt.Host = gateway
+		err := connectVPN(attempt)
+		if err == nil {
+			port, portErr := proxyPort(containerName(config.Name))
+			if portErr == nil {
+				portErr = activateProfileRoutes(attempt, port)
+			}
+			if portErr == nil {
+				setGatewayResult(config, gateway, true, false)
+				return nil
+			}
+			err = portErr
+		}
+		errors = append(errors, gateway+": "+err.Error())
+		setGatewayResult(config, gateway, false, exhaustive)
+	}
+	return fmt.Errorf("all VPN gateway attempts failed: %s", strings.Join(errors, " | "))
+}
+
 func connectVPN(config VPNConfig, otp ...string) error {
 	if strings.TrimSpace(config.Name) == "" || strings.TrimSpace(config.Type) == "" {
 		return fmt.Errorf("profile name and VPN type are required")
@@ -1295,7 +1670,8 @@ func connectVPN(config VPNConfig, otp ...string) error {
 			return fmt.Errorf("OpenVPN configuration is required")
 		}
 		configFile := filepath.Join(profileDir, "config.conf")
-		if err := os.WriteFile(configFile, []byte(config.Config), 0600); err != nil {
+		openVPNConfig := overrideOpenVPNRemote(config.Config, config.Host, config.Port)
+		if err := os.WriteFile(configFile, []byte(openVPNConfig), 0600); err != nil {
 			return fmt.Errorf("could not save OpenVPN configuration: %w", err)
 		}
 		args = append(args, "-v", configFile+":/vpn/config.conf:ro", "-e", "VPN_CONFIG=/vpn/config.conf")
@@ -1310,6 +1686,33 @@ func connectVPN(config VPNConfig, otp ...string) error {
 		timeout = 190 * time.Second
 	}
 	return waitForContainerHealthy(name, timeout)
+}
+
+func overrideOpenVPNRemote(configuration, gateway, port string) string {
+	lines := strings.Split(configuration, "\n")
+	result := make([]string, 0, len(lines)+1)
+	replaced := false
+	for _, line := range lines {
+		fields := strings.Fields(line)
+		if len(fields) >= 2 && strings.EqualFold(fields[0], "remote") {
+			if replaced {
+				continue
+			}
+			fields[1] = gateway
+			result = append(result, strings.Join(fields, " "))
+			replaced = true
+			continue
+		}
+		result = append(result, line)
+	}
+	if !replaced {
+		remote := "remote " + gateway
+		if strings.TrimSpace(port) != "" {
+			remote += " " + strings.TrimSpace(port)
+		}
+		result = append([]string{remote}, result...)
+	}
+	return strings.Join(result, "\n")
 }
 
 func sendOTP(config VPNConfig, otp string) error {

@@ -89,3 +89,38 @@ func TestSanitizeDiagnosticText(t *testing.T) {
 		t.Fatalf("unrelated diagnostic content was removed: %s", output)
 	}
 }
+
+func TestGatewayFailoverState(t *testing.T) {
+	previousPath := configPath
+	configPath = t.TempDir() + "/configs.json"
+	defer func() { configPath = previousPath }()
+	gatewayState.Lock()
+	gatewayState.loaded = false
+	gatewayState.items = make(map[string]gatewayRecord)
+	gatewayState.Unlock()
+	profile := VPNConfig{Name: "office", Host: "vpn-a.example.com", BackupGateways: "vpn-b.example.com\nvpn-c.example.com, vpn-b.example.com", FailoverLimit: 2}
+	gateways := gatewayCandidates(profile)
+	if strings.Join(gateways, ",") != "vpn-a.example.com,vpn-b.example.com,vpn-c.example.com" {
+		t.Fatalf("unexpected gateway list: %v", gateways)
+	}
+	if next := setGatewayResult(profile, gateways[0], false, false); next != gateways[0] {
+		t.Fatalf("gateway rotated before threshold: %s", next)
+	}
+	if next := setGatewayResult(profile, gateways[0], false, false); next != gateways[1] {
+		t.Fatalf("gateway did not rotate at threshold: %s", next)
+	}
+	if got := orderedGateways(profile); strings.Join(got, ",") != "vpn-b.example.com,vpn-c.example.com,vpn-a.example.com" {
+		t.Fatalf("unexpected persisted gateway order: %v", got)
+	}
+}
+
+func TestOverrideOpenVPNRemote(t *testing.T) {
+	configuration := "client\nremote vpn-a.example.com 1194 udp\nremote vpn-b.example.com 443 tcp\nauth-user-pass\n"
+	result := overrideOpenVPNRemote(configuration, "vpn-c.example.com", "1194")
+	if strings.Count(result, "remote ") != 1 || !strings.Contains(result, "remote vpn-c.example.com 1194 udp") {
+		t.Fatalf("unexpected OpenVPN gateway override: %s", result)
+	}
+	if !strings.Contains(result, "auth-user-pass") {
+		t.Fatalf("OpenVPN configuration content was lost: %s", result)
+	}
+}

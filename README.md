@@ -16,14 +16,19 @@ The user interface is a native SwiftUI tray app. A local Go service manages Dock
 
 - Native SwiftUI menu bar interface
 - Multiple concurrent VPN connections with independent split routes
+- Ordered primary/backup gateways with negotiation-based failover and persisted active endpoint
 - Fortinet SSL VPN (`openfortivpn`), FortiClient-compatible IPsec, OpenConnect and OpenVPN profiles
 - IKEv1/IKEv2, Main/Aggressive mode, XAuth/EAP, Mode Config, NAT-T, DPD, Phase 1/2 proposals, PFS and common encryption/DH groups
 - Inline OTP flow after negotiation starts, including cancel/retry controls
 - Live per-profile traffic counters, transfer rates and connection history
+- Persistent hourly/daily traffic analytics, reconnect totals, destinations and process rankings
+- Event-specific notification preferences, sounds and quiet hours
 - Active route, per-process connection and container log views
 - FortiClient and OpenVPN profile import with review before saving
 - Sanitized diagnostics ZIP export for support and troubleshooting
 - Verified update downloads using the SHA-256 file attached to each GitHub release
+- Secret-free JSON export and optional PBKDF2/AES-256-GCM encrypted profile backups
+- English and Turkish application languages
 - Bundled `vpntorisctl` command-line client
 - Per-profile edit and delete actions
 - Embedded route helper and `tun2socks`; no separate system extension package
@@ -31,7 +36,7 @@ The user interface is a native SwiftUI tray app. A local Go service manages Dock
 
 ## Requirements
 
-- Apple Silicon Mac (`arm64`)
+- Apple Silicon or Intel Mac (`arm64` or `x86_64`)
 - macOS 13 Ventura or later
 - [Docker Desktop for Mac](https://www.docker.com/products/docker-desktop/)
 - An administrator account for the one-time route-helper installation
@@ -53,6 +58,10 @@ Only the configured destinations go through a VPN. Normal internet traffic keeps
 ## OTP / 2FA
 
 Enable **Ask for 2FA / OTP** on the profile. Start the connection first; when the gateway requests the second factor, VPNToris keeps the connection card open and presents the OTP field. Enter the newly received code there. IPsec XAuth OTP is passed to the container through a short-lived FIFO rather than a Docker environment variable.
+
+## Gateway failover
+
+Enter backup gateway hostnames or IP addresses in the profile editor and choose how many failed automatic reconnect attempts are allowed before switching. VPNToris does not use ICMP or assume that ping is enabled. It evaluates the actual VPN negotiation and tunnel health, moves through the configured gateways in order and remembers the selected endpoint across application restarts. The active gateway and endpoint count are shown on the profile card. OpenVPN profiles receive a temporary runtime configuration containing the selected gateway; the saved `.ovpn` content is not modified.
 
 ## Security notes
 
@@ -86,6 +95,14 @@ The tray application must be running because the CLI talks to its localhost cont
 
 Choose **Export Diagnostics…** from the tray menu to create a ZIP containing a sanitized summary, route and DNS state, Docker container status and the last 500 lines of each VPNToris container log. Review the archive before sharing it because gateway names, usernames, private CIDRs and hostnames may still be operationally sensitive even though credential values are removed.
 
+## Backup and restore
+
+The default JSON export contains profiles without passwords or IPsec pre-shared keys. Encrypted backups can optionally include Keychain credentials. They use PBKDF2-HMAC-SHA256 with 200,000 iterations for key derivation and AES-256-GCM for authenticated encryption. Existing profiles with matching names are replaced during restore.
+
+## Traffic analytics and notifications
+
+VPNToris retains hourly traffic buckets for seven days and daily buckets for 90 days. It also records reconnect counts and sampled destination/process names without recording payloads, DNS contents or command-line arguments. The Notifications screen controls connect, disconnect, gateway, OTP, Docker, route-conflict and update events independently, including sound and quiet-hour preferences.
+
 ## Updates
 
 VPNToris checks the latest GitHub release in the background and also provides **Check for Updates…** in the tray menu. It downloads only a DMG that has a matching `.sha256` release asset, verifies the digest locally and saves the installer under `~/Downloads/VPNToris Updates`. The running application is not silently replaced.
@@ -108,7 +125,7 @@ cd ..
 ./scripts/release.sh --unsigned
 ```
 
-The unsigned DMG is written to `dist/`. It deliberately contains no Apple Developer ID or notarization. Before distributing or opening it, sign each executable and then the application bundle with your own Apple Developer ID certificate:
+The unsigned Universal DMG is written to `dist/`. It deliberately contains no Apple Developer ID or notarization. Set `ARCH=arm64` or `ARCH=x86_64` to create a single-architecture build. Before distributing or opening it, sign each executable and then the application bundle with your own Apple Developer ID certificate:
 
 ```bash
 APP="build/release/VPNToris.app"
@@ -143,7 +160,6 @@ privileged route helper ───── tun2socks/utun ───── destinati
 
 ## Upcoming
 
-- Intel-based macOS support (`x86_64` and Universal Binary)
 - Linux desktop application
 - Windows desktop application
 

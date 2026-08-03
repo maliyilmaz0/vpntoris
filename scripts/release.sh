@@ -3,7 +3,7 @@ set -euo pipefail
 
 ROOT_DIR=$(cd "$(dirname "$0")/.." && pwd)
 VERSION=${VERSION:-1.0.0}
-ARCH=${ARCH:-arm64}
+ARCH=${ARCH:-universal}
 APP_NAME=VPNToris
 BUILD_DIR="$ROOT_DIR/build/release"
 APP="$BUILD_DIR/$APP_NAME.app"
@@ -17,7 +17,7 @@ if [[ ${1:-} == "--unsigned" ]]; then
     UNSIGNED=true
 fi
 
-for command in go xcrun sips iconutil hdiutil; do
+for command in go xcrun sips iconutil hdiutil lipo; do
     command -v "$command" >/dev/null || { echo "Missing prerequisite: $command" >&2; exit 1; }
 done
 
@@ -25,6 +25,7 @@ rm -rf "$BUILD_DIR"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources/Licenses" "$DIST_DIR"
 cp "$ROOT_DIR/vpntoris-tray/Info.plist" "$APP/Contents/Info.plist"
 cp "$ROOT_DIR/assets/vpntoris-logo.png" "$APP/Contents/Resources/VPNTorisLogo.png"
+cp -R "$ROOT_DIR/vpntoris-tray/Resources/." "$APP/Contents/Resources/"
 mkdir -p "$APP/Contents/Resources/DockerContext"
 cp -R "$ROOT_DIR/docker/." "$APP/Contents/Resources/DockerContext/"
 
@@ -32,23 +33,37 @@ export GOCACHE=${GOCACHE:-/tmp/vpntoris-release-go-cache}
 export CLANG_MODULE_CACHE_PATH=${CLANG_MODULE_CACHE_PATH:-/tmp/vpntoris-release-clang-cache}
 export SWIFT_MODULECACHE_PATH=${SWIFT_MODULECACHE_PATH:-/tmp/vpntoris-release-swift-cache}
 
-(
-    cd "$ROOT_DIR/vpntoris-tray"
-    go test ./...
-    CGO_ENABLED=1 GOARCH="$ARCH" go build -trimpath -ldflags "-s -w" -o "$APP/Contents/MacOS/vpntorisd" .
-    CGO_ENABLED=0 GOARCH="$ARCH" go build -trimpath -ldflags "-s -w" -o "$APP/Contents/MacOS/vpntoris-route-helper" ./routerhelper
-    CGO_ENABLED=0 GOARCH="$ARCH" go build -trimpath -ldflags "-s -w" -o "$APP/Contents/MacOS/vpntorisctl" ./cli
-)
+ARCHES=("$ARCH")
+if [[ "$ARCH" == "universal" ]]; then
+    ARCHES=(arm64 x86_64)
+fi
 
-xcrun swiftc -O -whole-module-optimization -parse-as-library \
-    -target "$ARCH-apple-macos13.0" \
-    "$ROOT_DIR/vpntoris-tray/swift/VPNTorisApp.swift" \
-    -o "$APP/Contents/MacOS/VPNToris"
+(cd "$ROOT_DIR/vpntoris-tray" && go test ./...)
+for TARGET_ARCH in "${ARCHES[@]}"; do
+    GO_ARCH="$TARGET_ARCH"
+    if [[ "$TARGET_ARCH" == "x86_64" ]]; then GO_ARCH=amd64; fi
+    (
+        cd "$ROOT_DIR/vpntoris-tray"
+        CGO_ENABLED=0 GOARCH="$GO_ARCH" go build -trimpath -ldflags "-s -w" -o "$BUILD_DIR/vpntorisd-$TARGET_ARCH" .
+        CGO_ENABLED=0 GOARCH="$GO_ARCH" go build -trimpath -ldflags "-s -w" -o "$BUILD_DIR/vpntoris-route-helper-$TARGET_ARCH" ./routerhelper
+        CGO_ENABLED=0 GOARCH="$GO_ARCH" go build -trimpath -ldflags "-s -w" -o "$BUILD_DIR/vpntorisctl-$TARGET_ARCH" ./cli
+    )
+    xcrun swiftc -O -whole-module-optimization -parse-as-library \
+        -target "$TARGET_ARCH-apple-macos13.0" \
+        "$ROOT_DIR/vpntoris-tray/swift/VPNTorisApp.swift" \
+        -o "$BUILD_DIR/VPNToris-$TARGET_ARCH"
+    (cd "$ROOT_DIR/vpntoris-tray" && GOARCH="$GO_ARCH" go build -o "$BUILD_DIR/tun2socks-bin-$TARGET_ARCH" github.com/xjasonlyu/tun2socks/v2)
+done
 
-TUN_TMP="$BUILD_DIR/tun2socks-bin"
-mkdir -p "$TUN_TMP"
-GOBIN="$TUN_TMP" GOARCH="$ARCH" go install github.com/xjasonlyu/tun2socks/v2@v2.6.0
-cp "$TUN_TMP/tun2socks" "$APP/Contents/MacOS/tun2socks"
+for binary in vpntorisd vpntoris-route-helper vpntorisctl VPNToris tun2socks-bin; do
+    OUTPUT_NAME="$binary"
+    if [[ "$binary" == "tun2socks-bin" ]]; then OUTPUT_NAME=tun2socks; fi
+    if [[ "$ARCH" == "universal" ]]; then
+        lipo -create "$BUILD_DIR/$binary-arm64" "$BUILD_DIR/$binary-x86_64" -output "$APP/Contents/MacOS/$OUTPUT_NAME"
+    else
+        cp "$BUILD_DIR/$binary-$ARCH" "$APP/Contents/MacOS/$OUTPUT_NAME"
+    fi
+done
 cp "$ROOT_DIR/third_party/tun2socks-LICENSE" "$APP/Contents/Resources/Licenses/tun2socks-LICENSE"
 
 ICONSET="$BUILD_DIR/AppIcon.iconset"

@@ -3,6 +3,7 @@ import Security
 import UserNotifications
 import UniformTypeIdentifiers
 import CryptoKit
+import Charts
 
 struct VPNProfile: Codable, Identifiable, Hashable {
     var id: String { name }
@@ -10,6 +11,8 @@ struct VPNProfile: Codable, Identifiable, Hashable {
     var description = ""
     var type = "openfortivpn"
     var host = ""
+    var backupGateways: String?
+    var failoverThreshold: Int?
     var port = "443"
     var user = ""
     var password = ""
@@ -63,9 +66,12 @@ struct ProfileStatus: Codable, Identifiable {
     let description: String
     let type: String
     let host: String
+    let activeGateway: String
+    let gatewayCount: Int
     let routes: String
     let connected: Bool
     let twoFactor: Bool
+    let autoReconnect: Bool
     let needsOtp: Bool
 }
 
@@ -90,9 +96,65 @@ struct HistoryEntry: Codable, Identifiable { let id: String; let profile: String
 struct RouteMatch: Codable, Identifiable { var id: String { profile + cidr }; let profile: String; let cidr: String; let prefix: Int; let connected: Bool }
 struct RouteCheck: Codable { let target: String; let matches: [RouteMatch]; let conflict: Bool }
 struct ActiveFlow: Codable, Identifiable { let id: String; let profile: String; let process: String; let pid: Int; let local: String; let remote: String; let remoteIp: String; let port: Int; let `protocol`: String }
+struct AnalyticsTraffic: Codable { let received: UInt64; let sent: UInt64 }
+struct AnalyticsProfile: Codable, Identifiable { var id: String { name }; let name: String; let received: UInt64; let sent: UInt64; let reconnects: Int; let hourly: [String: AnalyticsTraffic]; let daily: [String: AnalyticsTraffic]; let destinations: [String: Int]; let processes: [String: Int] }
+struct AnalyticsSettings: Codable { let hourlyDays: Int; let dailyDays: Int }
+
+enum AppNotifications {
+    static func enabled(_ event: String) -> Bool { let key = "notifications.\(event)"; return UserDefaults.standard.object(forKey: key) == nil || UserDefaults.standard.bool(forKey: key) }
+    static func send(_ event: String, title: String, body: String, id: String, sound: Bool = true) {
+        guard enabled(event) else { return }
+        let defaults = UserDefaults.standard
+        let quietEnabled = defaults.bool(forKey: "notifications.quietEnabled")
+        let hour = Calendar.current.component(.hour, from: Date())
+        let start = defaults.object(forKey: "notifications.quietStart") as? Int ?? 22
+        let end = defaults.object(forKey: "notifications.quietEnd") as? Int ?? 8
+        let quiet = quietEnabled && (start <= end ? hour >= start && hour < end : hour >= start || hour < end)
+        let content = UNMutableNotificationContent()
+        content.title = title
+        content.body = body
+        if sound && !quiet && (defaults.object(forKey: "notifications.sound") == nil || defaults.bool(forKey: "notifications.sound")) { content.sound = .default }
+        UNUserNotificationCenter.current().add(UNNotificationRequest(identifier: id, content: content, trigger: nil))
+    }
+}
 
 struct ReleaseAsset: Codable { let name: String; let browserDownloadUrl: URL; enum CodingKeys: String, CodingKey { case name; case browserDownloadUrl = "browser_download_url" } }
 struct GitHubRelease: Codable { let tagName: String; let name: String?; let htmlUrl: URL; let assets: [ReleaseAsset]; enum CodingKeys: String, CodingKey { case tagName = "tag_name"; case name; case htmlUrl = "html_url"; case assets } }
+
+struct BackupEnvelope: Codable { let version: Int; let kdf: String; let iterations: Int; let salt: String; let payload: String }
+
+enum BackupCrypto {
+    static func encrypt(_ data: Data, password: String) throws -> Data {
+        var salt = Data(count: 16)
+        let status = salt.withUnsafeMutableBytes { SecRandomCopyBytes(kSecRandomDefault, 16, $0.baseAddress!) }
+        guard status == errSecSuccess else { throw NSError(domain: "VPNToris", code: 9, userInfo: [NSLocalizedDescriptionKey: "Could not generate secure random data."]) }
+        let iterations = 200_000
+        let key = derive(password: password, salt: salt, iterations: iterations)
+        let sealed = try AES.GCM.seal(data, using: key)
+        guard let combined = sealed.combined else { throw NSError(domain: "VPNToris", code: 10, userInfo: [NSLocalizedDescriptionKey: "Could not create encrypted backup."]) }
+        return try JSONEncoder.pretty.encode(BackupEnvelope(version: 1, kdf: "PBKDF2-HMAC-SHA256", iterations: iterations, salt: salt.base64EncodedString(), payload: combined.base64EncodedString()))
+    }
+    static func decrypt(_ data: Data, password: String) throws -> Data {
+        let envelope = try JSONDecoder().decode(BackupEnvelope.self, from: data)
+        guard envelope.version == 1, envelope.kdf == "PBKDF2-HMAC-SHA256", envelope.iterations >= 100_000, envelope.iterations <= 1_000_000, let salt = Data(base64Encoded: envelope.salt), let payload = Data(base64Encoded: envelope.payload) else { throw NSError(domain: "VPNToris", code: 11, userInfo: [NSLocalizedDescriptionKey: "Unsupported or damaged backup file."]) }
+        let key = derive(password: password, salt: salt, iterations: envelope.iterations)
+        return try AES.GCM.open(AES.GCM.SealedBox(combined: payload), using: key)
+    }
+    private static func derive(password: String, salt: Data, iterations: Int) -> SymmetricKey {
+        let key = SymmetricKey(data: Data(password.utf8))
+        var input = salt
+        input.append(contentsOf: [0, 0, 0, 1])
+        var current = Data(HMAC<SHA256>.authenticationCode(for: input, using: key))
+        var result = current
+        if iterations > 1 {
+            for _ in 1..<iterations {
+                current = Data(HMAC<SHA256>.authenticationCode(for: current, using: key))
+                for index in result.indices { result[index] ^= current[index] }
+            }
+        }
+        return SymmetricKey(data: result)
+    }
+}
 
 @MainActor final class UpdateChecker: ObservableObject {
     @Published var release: GitHubRelease?
@@ -115,6 +177,10 @@ struct GitHubRelease: Codable { let tagName: String; let name: String?; let html
             guard (response as? HTTPURLResponse)?.statusCode == 200 else { throw NSError(domain: "VPNToris", code: 2, userInfo: [NSLocalizedDescriptionKey: "GitHub did not return a release."]) }
             release = try JSONDecoder().decode(GitHubRelease.self, from: data)
             state = updateAvailable ? "Version \(release?.tagName ?? "") is available" : "VPNToris is up to date"
+            if updateAvailable, let tag = release?.tagName, UserDefaults.standard.string(forKey: "notifications.lastUpdate") != tag {
+                AppNotifications.send("update", title: "VPNToris update available", body: "Version \(tag) is ready to download.", id: "vpntoris-update-\(tag)")
+                UserDefaults.standard.set(tag, forKey: "notifications.lastUpdate")
+            }
         } catch {
             if !silent { state = error.localizedDescription }
         }
@@ -196,7 +262,9 @@ enum ProfileKeychain {
     @Published var trafficHistory: [String: [Double]] = [:]
     private let api = URL(string: "http://127.0.0.1:17984")!
     private var previousConnections: [String: Bool] = [:]
+    private var previousGateways: [String: String] = [:]
     private var connectionStateInitialized = false
+    private var pendingReconnect: Set<String> = []
 
     func refresh() async {
         do {
@@ -205,30 +273,38 @@ enum ProfileKeychain {
             if connectionStateInitialized {
                 for profile in updated {
                     if let previous = previousConnections[profile.name], previous != profile.connected {
-                        notifyConnection(profile.name, connected: profile.connected)
+                        if !profile.connected && profile.autoReconnect { pendingReconnect.insert(profile.name); notifyConnection(profile.name, connected: false) }
+                        else if profile.connected && pendingReconnect.remove(profile.name) != nil { AppNotifications.send("reconnect", title: "VPN reconnected", body: profile.name, id: "vpntoris-reconnected-\(profile.name)") }
+                        else { notifyConnection(profile.name, connected: profile.connected) }
+                    }
+                    if profile.gatewayCount > 1, let previous = previousGateways[profile.name], previous != profile.activeGateway {
+                        notifyGatewayChange(profile.name, gateway: profile.activeGateway)
                     }
                 }
             }
             profiles = updated
             previousConnections = Dictionary(uniqueKeysWithValues: updated.map { ($0.name, $0.connected) })
+            previousGateways = Dictionary(uniqueKeysWithValues: updated.map { ($0.name, $0.activeGateway) })
             connectionStateInitialized = true
         } catch { self.error = error.localizedDescription }
     }
 
     private func notifyConnection(_ profile: String, connected: Bool) {
-        let content = UNMutableNotificationContent()
-        content.title = connected ? "VPN connected" : "VPN disconnected"
-        content.body = profile
-        content.sound = connected ? nil : .default
-        UNUserNotificationCenter.current().add(UNNotificationRequest(identifier: "vpntoris-state-\(profile)-\(connected)", content: content, trigger: nil))
+        AppNotifications.send(connected ? "connect" : "disconnect", title: connected ? "VPN connected" : "VPN disconnected", body: profile, id: "vpntoris-state-\(profile)-\(connected)", sound: !connected)
+    }
+
+    private func notifyGatewayChange(_ profile: String, gateway: String) {
+        AppNotifications.send("gateway", title: "VPN gateway changed", body: "\(profile) will use \(gateway)", id: "vpntoris-gateway-\(profile)-\(gateway)")
     }
 
     func refreshDocker(retry: Bool = false) async {
         do {
+            let previousState = docker.state
             var request = URLRequest(url: api.appending(path: "api/docker"))
             if retry { request.httpMethod = "POST" }
             let (data, _) = try await URLSession.shared.data(for: request)
             docker = try JSONDecoder().decode(DockerStatus.self, from: data)
+            if previousState == "ready" && docker.state != "ready" { AppNotifications.send("docker", title: "Docker unavailable", body: docker.message, id: "vpntoris-docker-\(docker.state)") }
         } catch {
             docker = DockerStatus(state: "error", message: error.localizedDescription)
         }
@@ -256,7 +332,7 @@ enum ProfileKeychain {
             var request = URLRequest(url: parts.url!)
             request.httpMethod = "POST"
             if !otp.isEmpty { request.setValue(otp, forHTTPHeaderField: "X-VPNToris-OTP") }
-            if action == "connect", let profile = storedProfile(named: name) {
+            if (action == "connect" || action == "arm"), let profile = storedProfile(named: name) {
                 request.setValue(profile.password, forHTTPHeaderField: "X-VPNToris-Password")
                 request.setValue(profile.ipsec?.preSharedKey ?? "", forHTTPHeaderField: "X-VPNToris-PSK")
             }
@@ -306,6 +382,15 @@ enum ProfileKeychain {
 
     func deleteCredentials(named name: String) { ProfileKeychain.delete(profile: name) }
 
+    func backupProfiles(includeSecrets: Bool) -> [VPNProfile] {
+        loadConfigs().map { profile in var copy = profile; if !includeSecrets { copy.password = ""; copy.ipsec?.preSharedKey = "" }; return copy }
+    }
+
+    func restoreProfiles(_ profiles: [VPNProfile]) throws {
+        for profile in profiles { try save(profile, replacing: profile.name) }
+        Task { await refresh() }
+    }
+
     func migrateLegacyCredentials() {
         guard let url = try? configURL(), let data = try? Data(contentsOf: url), var configs = try? JSONDecoder().decode([VPNProfile].self, from: data) else { return }
         var changed = false
@@ -325,8 +410,10 @@ enum ProfileKeychain {
     }
 
     func connectLaunchProfiles() async {
-        for profile in loadConfigs() where profile.connectOnLaunch == true && profile.twoFactor != true {
-            if profiles.first(where: { $0.name == profile.name })?.connected != true { await action("connect", name: profile.name) }
+        for profile in loadConfigs() {
+            let connected = profiles.first(where: { $0.name == profile.name })?.connected == true
+            if connected && profile.autoReconnect == true { await action("arm", name: profile.name) }
+            else if !connected && profile.connectOnLaunch == true && profile.twoFactor != true { await action("connect", name: profile.name) }
         }
     }
 
@@ -363,6 +450,8 @@ struct ProfileEditor: View {
             TextField("Profile name", text: $profile.name)
             Picker("VPN type", selection: $profile.type) { Text("FortiVPN SSL").tag("openfortivpn"); Text("FortiClient IPsec").tag("ipsec"); Text("OpenConnect").tag("openconnect"); Text("OpenVPN").tag("openvpn") }
             HStack { TextField("Host", text: $profile.host); TextField("Port", text: $profile.port).frame(width: 80) }
+            TextField("Backup gateways, one per line", text: Binding(get: { profile.backupGateways ?? "" }, set: { profile.backupGateways = $0 }), axis: .vertical).lineLimit(2...4)
+            Stepper("Switch gateway after \(profile.failoverThreshold ?? 2) failed reconnect attempts", value: Binding(get: { max(profile.failoverThreshold ?? 2, 1) }, set: { profile.failoverThreshold = $0 }), in: 1...10)
             TextField("Username", text: $profile.user)
             SecureField("Password", text: $profile.password)
             Toggle("Ask for 2FA / OTP when connecting", isOn: Binding(get: { profile.twoFactor ?? false }, set: { profile.twoFactor = $0 }))
@@ -434,6 +523,10 @@ struct ContentView: View {
     @State private var showFlows = false
     @State private var showImporter = false
     @State private var showUpdates = false
+    @State private var showAnalytics = false
+    @State private var showNotifications = false
+    @State private var showBackup = false
+    @State private var showLanguage = false
     @State private var importError = ""
     @State private var pendingOTP: Set<String> = []
     @State private var submittedOTP: Set<String> = []
@@ -450,8 +543,12 @@ struct ContentView: View {
                     Button("Active Connections", systemImage: "point.3.filled.connected.trianglepath.dotted") { showFlows = true }
                     Button("Route Tester", systemImage: "scope") { showRouteTest = true }
                     Button("Connection History", systemImage: "clock.arrow.circlepath") { showHistory = true }
+                    Button("Traffic Analytics", systemImage: "chart.xyaxis.line") { showAnalytics = true }
+                    Button("Notifications", systemImage: "bell.badge") { showNotifications = true }
+                    Button("Language", systemImage: "character.bubble") { showLanguage = true }
                     Divider()
                     Button("Import VPN Profile…", systemImage: "square.and.arrow.down") { showImporter = true }
+                    Button("Backup and Restore…", systemImage: "lock.doc") { showBackup = true }
                     Button("Export Diagnostics…", systemImage: "wrench.and.screwdriver") { Task { await exportDiagnostics() } }
                     Button("Check for Updates…", systemImage: "arrow.triangle.2.circlepath") { showUpdates = true; Task { await updater.check() } }
                 } label: { Image(systemName: "ellipsis.circle") }.menuStyle(.borderlessButton).frame(width: 34)
@@ -484,7 +581,7 @@ struct ContentView: View {
                     ForEach(store.profiles) { profile in
                         VStack(alignment: .leading, spacing: 10) {
                             HStack {
-                                VStack(alignment: .leading, spacing: 3) { Text(profile.name).font(.headline); Text("\(profile.type) · \(profile.host)").font(.caption).foregroundStyle(.secondary) }
+                                VStack(alignment: .leading, spacing: 3) { Text(profile.name).font(.headline); Text("\(profile.type) · \(profile.activeGateway)").font(.caption).foregroundStyle(.secondary); if profile.gatewayCount > 1 { Text("Gateway failover · \(profile.gatewayCount) endpoints").font(.caption2).foregroundStyle(.orange) } }
                                 Spacer()
                                 if store.busy.contains(profile.name) && !profile.connected {
                                     ProgressView().controlSize(.small)
@@ -567,6 +664,10 @@ struct ContentView: View {
         .sheet(isPresented: $showRouteTest) { RouteTestView() }
         .sheet(isPresented: $showFlows) { ActiveFlowsView() }
         .sheet(isPresented: $showUpdates) { UpdateView(updater: updater) }
+        .sheet(isPresented: $showAnalytics) { AnalyticsView() }
+        .sheet(isPresented: $showNotifications) { NotificationSettingsView() }
+        .sheet(isPresented: $showBackup) { BackupView(store: store) }
+        .sheet(isPresented: $showLanguage) { LanguageSettingsView() }
         .fileImporter(isPresented: $showImporter, allowedContentTypes: [.data, .plainText], allowsMultipleSelection: false) { result in
             do { if let url = try result.get().first { oldName = nil; editing = try importedProfile(from: url) } } catch { importError = error.localizedDescription }
         }
@@ -597,11 +698,7 @@ struct ContentView: View {
     }
 
     private func notifyOTP(_ profile: String) {
-        let content = UNMutableNotificationContent()
-        content.title = "VPNToris needs an OTP"
-        content.body = "\(profile) is reconnecting. Open VPNToris and enter the new verification code."
-        content.sound = .default
-        UNUserNotificationCenter.current().add(UNNotificationRequest(identifier: "vpntoris-otp-\(profile)", content: content, trigger: nil))
+        AppNotifications.send("otp", title: "VPNToris needs an OTP", body: "\(profile) is reconnecting. Open VPNToris and enter the new verification code.", id: "vpntoris-otp-\(profile)")
     }
 
     private func importedProfile(from url: URL) throws -> VPNProfile {
@@ -659,6 +756,157 @@ struct ContentView: View {
         pendingOTP.remove(profile.name); submittedOTP.remove(profile.name); otpCodes[profile.name] = ""
         Task { await store.action("disconnect", name: profile.name) }
     }
+}
+
+struct LanguageSettingsView: View {
+    @Environment(\.dismiss) private var dismiss
+    @AppStorage("appLanguage") private var language = "system"
+    @State private var restartRequired = false
+    var body: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            HStack { Text("Language").font(.title2.bold()); Spacer(); Button("Done") { dismiss() } }
+            Picker("Application language", selection: $language) { Text("System Default").tag("system"); Text("English").tag("en"); Text("Türkçe").tag("tr") }.pickerStyle(.radioGroup).onChange(of: language) { value in
+                if value == "system" { UserDefaults.standard.removeObject(forKey: "AppleLanguages") } else { UserDefaults.standard.set([value], forKey: "AppleLanguages") }
+                restartRequired = true
+            }
+            if restartRequired { HStack { Text("Restart VPNToris to apply the language change.").foregroundStyle(.secondary); Spacer(); Button("Restart Now") { restart() }.buttonStyle(.borderedProminent) } }
+        }.padding(22).frame(width: 460)
+    }
+    private func restart() { let process = Process(); process.executableURL = URL(fileURLWithPath: "/usr/bin/open"); process.arguments = ["-n", Bundle.main.bundlePath]; try? process.run(); NSApplication.shared.terminate(nil) }
+}
+
+struct BackupView: View {
+    @Environment(\.dismiss) private var dismiss
+    @ObservedObject var store: VPNStore
+    @State private var encrypted = false
+    @State private var includeSecrets = false
+    @State private var password = ""
+    @State private var confirmation = ""
+    @State private var importPassword = ""
+    @State private var pendingImport: Data?
+    @State private var status = ""
+    @State private var working = false
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            HStack { Text("Backup and Restore").font(.title2.bold()); Spacer(); Button("Done") { dismiss() } }
+            GroupBox("Export") { VStack(alignment: .leading, spacing: 10) {
+                Toggle("Encrypt backup", isOn: $encrypted).onChange(of: encrypted) { value in if !value { includeSecrets = false; password = ""; confirmation = "" } }
+                Toggle("Include passwords and pre-shared keys", isOn: $includeSecrets).disabled(!encrypted)
+                if encrypted { SecureField("Backup password, at least 8 characters", text: $password); SecureField("Confirm password", text: $confirmation); Text("PBKDF2-HMAC-SHA256 derives the key and AES-256-GCM authenticates and encrypts the backup.").font(.caption).foregroundStyle(.secondary) }
+                HStack { Text(encrypted ? "Encrypted .vpntoris backup" : "Secret-free JSON backup").font(.caption).foregroundStyle(.secondary); Spacer(); if working { ProgressView().controlSize(.small) }; Button("Export…") { Task { await exportBackup() } }.buttonStyle(.borderedProminent).disabled(working || encrypted && (password.count < 8 || password != confirmation)) }
+            }.frame(maxWidth: .infinity, alignment: .leading) }
+            GroupBox("Restore") { VStack(alignment: .leading, spacing: 10) {
+                Text("Existing profiles with the same name are replaced. Review imported profiles before connecting.").font(.caption).foregroundStyle(.secondary)
+                Button("Choose Backup…") { chooseBackup() }
+                if pendingImport != nil { SecureField("Backup password", text: $importPassword); HStack { Button("Cancel") { pendingImport = nil; importPassword = "" }; Button("Decrypt and Restore") { Task { await restoreEncrypted() } }.buttonStyle(.borderedProminent).disabled(working || importPassword.isEmpty) } }
+            }.frame(maxWidth: .infinity, alignment: .leading) }
+            if !status.isEmpty { Text(status).font(.callout).foregroundStyle(status.hasPrefix("Error") ? .red : .green) }
+        }.padding(22).frame(width: 560)
+    }
+    private func exportBackup() async {
+        working = true
+        defer { working = false }
+        do {
+            let profiles = store.backupProfiles(includeSecrets: encrypted && includeSecrets)
+            let plain = try JSONEncoder.pretty.encode(profiles)
+            let exportPassword = password
+            let data = encrypted ? try await Task.detached { try BackupCrypto.encrypt(plain, password: exportPassword) }.value : plain
+            let panel = NSSavePanel()
+            panel.allowedContentTypes = encrypted ? [.data] : [.json]
+            panel.nameFieldStringValue = encrypted ? "VPNToris-Backup.vpntoris" : "VPNToris-Profiles.json"
+            if panel.runModal() == .OK, let url = panel.url { try data.write(to: url, options: .atomic); status = "Backup saved successfully." }
+        } catch { status = "Error: \(error.localizedDescription)" }
+    }
+    private func chooseBackup() {
+        let panel = NSOpenPanel()
+        panel.allowedContentTypes = [.json, .data]
+        panel.allowsMultipleSelection = false
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        do {
+            let data = try Data(contentsOf: url)
+            if let profiles = try? JSONDecoder().decode([VPNProfile].self, from: data) { try store.restoreProfiles(profiles); status = "\(profiles.count) profiles restored."; pendingImport = nil }
+            else if (try? JSONDecoder().decode(BackupEnvelope.self, from: data)) != nil { pendingImport = data; importPassword = ""; status = "Enter the backup password." }
+            else { throw NSError(domain: "VPNToris", code: 12, userInfo: [NSLocalizedDescriptionKey: "Unsupported backup format."]) }
+        } catch { status = "Error: \(error.localizedDescription)" }
+    }
+    private func restoreEncrypted() async {
+        guard let pendingImport else { return }
+        working = true
+        defer { working = false }
+        let password = importPassword
+        do { let plain = try await Task.detached { try BackupCrypto.decrypt(pendingImport, password: password) }.value; let profiles = try JSONDecoder().decode([VPNProfile].self, from: plain); try store.restoreProfiles(profiles); self.pendingImport = nil; importPassword = ""; status = "\(profiles.count) encrypted profiles restored." } catch { status = "Error: Wrong password or damaged backup." }
+    }
+}
+
+struct NotificationSettingsView: View {
+    @Environment(\.dismiss) private var dismiss
+    @AppStorage("notifications.connect") private var connect = true
+    @AppStorage("notifications.disconnect") private var disconnect = true
+    @AppStorage("notifications.reconnect") private var reconnect = true
+    @AppStorage("notifications.gateway") private var gateway = true
+    @AppStorage("notifications.otp") private var otp = true
+    @AppStorage("notifications.docker") private var docker = true
+    @AppStorage("notifications.routeConflict") private var routeConflict = true
+    @AppStorage("notifications.update") private var update = true
+    @AppStorage("notifications.sound") private var sound = true
+    @AppStorage("notifications.quietEnabled") private var quietEnabled = false
+    @AppStorage("notifications.quietStart") private var quietStart = 22
+    @AppStorage("notifications.quietEnd") private var quietEnd = 8
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            HStack { Text("Notifications").font(.title2.bold()); Spacer(); Button("System Settings") { if let url = URL(string: "x-apple.systempreferences:com.apple.Notifications-Settings.extension") { NSWorkspace.shared.open(url) } }; Button("Done") { dismiss() } }
+            GroupBox("VPN Events") { VStack(alignment: .leading, spacing: 9) { Toggle("Connected", isOn: $connect); Toggle("Disconnected", isOn: $disconnect); Toggle("Reconnected", isOn: $reconnect); Toggle("Gateway failover", isOn: $gateway); Toggle("OTP required", isOn: $otp) }.frame(maxWidth: .infinity, alignment: .leading) }
+            GroupBox("System Events") { VStack(alignment: .leading, spacing: 9) { Toggle("Docker failure", isOn: $docker); Toggle("Route conflict", isOn: $routeConflict); Toggle("Update available", isOn: $update) }.frame(maxWidth: .infinity, alignment: .leading) }
+            Toggle("Notification sounds", isOn: $sound)
+            GroupBox("Quiet Hours") { VStack(alignment: .leading, spacing: 8) { Toggle("Mute sounds during quiet hours", isOn: $quietEnabled); HStack { Stepper("Start: \(quietStart):00", value: $quietStart, in: 0...23); Stepper("End: \(quietEnd):00", value: $quietEnd, in: 0...23) }.disabled(!quietEnabled); Text("Notifications remain visible; only their sound is muted.").font(.caption).foregroundStyle(.secondary) }.frame(maxWidth: .infinity, alignment: .leading) }
+        }.padding(22).frame(width: 520)
+    }
+}
+
+struct AnalyticsView: View {
+    struct Point: Identifiable { let id: String; let label: String; let received: UInt64; let sent: UInt64 }
+    @Environment(\.dismiss) private var dismiss
+    @State private var profiles: [AnalyticsProfile] = []
+    @State private var selection = ""
+    @State private var period = "Daily"
+    @State private var hourlyDays = 7
+    @State private var dailyDays = 90
+    var body: some View {
+        VStack(spacing: 14) {
+            HStack { Text("Traffic Analytics").font(.title2.bold()); Spacer(); Button("Clear", role: .destructive) { Task { await clear() } }; Button("Done") { dismiss() } }
+            HStack { Stepper("Hourly: \(hourlyDays) days", value: $hourlyDays, in: 1...30); Stepper("Daily: \(dailyDays) days", value: $dailyDays, in: 7...365); Button("Save Retention") { Task { await saveRetention() } } }.font(.caption)
+            if profiles.isEmpty { VStack(spacing: 10) { Image(systemName: "chart.xyaxis.line").font(.largeTitle); Text("No traffic history yet").font(.headline); Text("Totals appear after a VPN transfers data.").foregroundStyle(.secondary) }.frame(maxWidth: .infinity, maxHeight: .infinity) }
+            else if let profile = selectedProfile {
+                HStack { Picker("Profile", selection: $selection) { ForEach(profiles) { Text($0.name).tag($0.name) } }.frame(maxWidth: 280); Picker("Period", selection: $period) { Text("Hourly").tag("Hourly"); Text("Daily").tag("Daily") }.pickerStyle(.segmented).frame(width: 180); Spacer() }
+                HStack(spacing: 12) {
+                    metric("Downloaded", bytes(profile.received), "arrow.down", .green)
+                    metric("Uploaded", bytes(profile.sent), "arrow.up", .blue)
+                    metric("Reconnects", "\(profile.reconnects)", "arrow.clockwise", .orange)
+                }
+                Chart(points) { point in
+                    BarMark(x: .value("Time", point.label), y: .value("Downloaded", point.received)).foregroundStyle(.green)
+                    BarMark(x: .value("Time", point.label), y: .value("Uploaded", point.sent)).foregroundStyle(.blue)
+                }.chartYAxis { AxisMarks(position: .leading) { value in AxisGridLine(); AxisValueLabel { if let amount = value.as(UInt64.self) { Text(bytes(amount)) } } } }.frame(height: 190)
+                HStack(alignment: .top, spacing: 14) {
+                    ranking("Top Destinations", values: profile.destinations, icon: "server.rack")
+                    ranking("Top Processes", values: profile.processes, icon: "app.connected.to.app.below.fill")
+                }
+            }
+        }.padding(20).frame(width: 760, height: 600).task { await load(); await loadRetention() }
+    }
+    private var selectedProfile: AnalyticsProfile? { profiles.first { $0.name == selection } ?? profiles.first }
+    private var points: [Point] {
+        guard let profile = selectedProfile else { return [] }
+        let values = period == "Hourly" ? profile.hourly : profile.daily
+        return values.keys.sorted().suffix(period == "Hourly" ? 24 : 30).map { key in Point(id: key, label: period == "Hourly" ? String(key.dropFirst(5).prefix(8)).replacingOccurrences(of: "T", with: " ") : String(key.dropFirst(5)), received: values[key]?.received ?? 0, sent: values[key]?.sent ?? 0) }
+    }
+    private func metric(_ title: String, _ value: String, _ icon: String, _ color: Color) -> some View { VStack(alignment: .leading, spacing: 6) { Label(title, systemImage: icon).foregroundStyle(color); Text(value).font(.title3.bold().monospacedDigit()) }.padding(12).frame(maxWidth: .infinity, alignment: .leading).background(.quaternary, in: RoundedRectangle(cornerRadius: 10)) }
+    private func ranking(_ title: String, values: [String: Int], icon: String) -> some View { VStack(alignment: .leading, spacing: 8) { Label(title, systemImage: icon).font(.headline); ForEach(Array(values.sorted { $0.value > $1.value }.prefix(6)), id: \.key) { item in HStack { Text(item.key).lineLimit(1); Spacer(); Text("\(item.value)").monospacedDigit().foregroundStyle(.secondary) }.font(.caption) }; if values.isEmpty { Text("No samples").font(.caption).foregroundStyle(.secondary) } }.padding(12).frame(maxWidth: .infinity, alignment: .leading).background(.quaternary, in: RoundedRectangle(cornerRadius: 10)) }
+    private func bytes(_ value: UInt64) -> String { ByteCountFormatter.string(fromByteCount: Int64(value), countStyle: .file) }
+    private func load() async { if let url = URL(string: "http://127.0.0.1:17984/api/analytics"), let (data, _) = try? await URLSession.shared.data(from: url), let decoded = try? JSONDecoder().decode([AnalyticsProfile].self, from: data) { profiles = decoded; if selection.isEmpty { selection = decoded.first?.name ?? "" } } }
+    private func clear() async { var request = URLRequest(url: URL(string: "http://127.0.0.1:17984/api/analytics")!); request.httpMethod = "DELETE"; _ = try? await URLSession.shared.data(for: request); profiles = []; selection = "" }
+    private func loadRetention() async { if let url = URL(string: "http://127.0.0.1:17984/api/analytics-settings"), let (data, _) = try? await URLSession.shared.data(from: url), let settings = try? JSONDecoder().decode(AnalyticsSettings.self, from: data) { hourlyDays = settings.hourlyDays; dailyDays = settings.dailyDays } }
+    private func saveRetention() async { var parts = URLComponents(string: "http://127.0.0.1:17984/api/analytics-settings")!; parts.queryItems = [.init(name: "hourlyDays", value: String(hourlyDays)), .init(name: "dailyDays", value: String(dailyDays))]; var request = URLRequest(url: parts.url!); request.httpMethod = "POST"; _ = try? await URLSession.shared.data(for: request) }
 }
 
 struct UpdateView: View {
@@ -732,7 +980,7 @@ struct RouteTestView: View {
             }
         }.padding(18).frame(width: 540, height: 400)
     }
-    private func check() async { do { var parts = URLComponents(string: "http://127.0.0.1:17984/api/route-check")!; parts.queryItems = [.init(name: "target", value: target)]; let (data, response) = try await URLSession.shared.data(from: parts.url!); guard (response as? HTTPURLResponse)?.statusCode == 200 else { throw NSError(domain: "VPNToris", code: 1, userInfo: [NSLocalizedDescriptionKey: String(data: data, encoding: .utf8) ?? "Route check failed"]) }; result = try JSONDecoder().decode(RouteCheck.self, from: data); error = "" } catch { self.error = error.localizedDescription; result = nil } }
+    private func check() async { do { var parts = URLComponents(string: "http://127.0.0.1:17984/api/route-check")!; parts.queryItems = [.init(name: "target", value: target)]; let (data, response) = try await URLSession.shared.data(from: parts.url!); guard (response as? HTTPURLResponse)?.statusCode == 200 else { throw NSError(domain: "VPNToris", code: 1, userInfo: [NSLocalizedDescriptionKey: String(data: data, encoding: .utf8) ?? "Route check failed"]) }; let decoded = try JSONDecoder().decode(RouteCheck.self, from: data); result = decoded; if decoded.conflict { AppNotifications.send("routeConflict", title: "VPN route conflict", body: "\(decoded.target) matches routes with the same prefix.", id: "vpntoris-route-conflict-\(decoded.target)") }; error = "" } catch { self.error = error.localizedDescription; result = nil } }
 }
 
 struct TrafficSparkline: View {
@@ -791,7 +1039,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory)
-        UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound, .badge]) { _, _ in }
+        UNUserNotificationCenter.current().getNotificationSettings { settings in
+            if settings.authorizationStatus == .notDetermined { UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound, .badge]) { _, _ in } }
+        }
         VPNStore().migrateLegacyCredentials()
         let process = Process(); process.executableURL = Bundle.main.bundleURL.appending(path: "Contents/MacOS/vpntorisd"); process.arguments = ["--daemon", String(ProcessInfo.processInfo.processIdentifier)]; try? process.run(); daemon = process
 

@@ -15,10 +15,12 @@ import (
 )
 
 type request struct {
-	Action string   `json:"action"`
-	Key    string   `json:"key"`
-	Port   int      `json:"port"`
-	Routes []string `json:"routes"`
+	Action  string   `json:"action"`
+	Key     string   `json:"key"`
+	Port    int      `json:"port"`
+	Routes  []string `json:"routes"`
+	Domains []string `json:"domains"`
+	DNSPort int      `json:"dnsPort"`
 }
 
 const stateDir = "/var/run/vpntoris"
@@ -144,9 +146,9 @@ func serve(uid int) error {
 			}
 			if err == nil {
 				stop(req)
-				if req.Action == "start" {
+				if req.Action == "start-v2" {
 					err = start(req)
-				} else if req.Action != "stop" {
+				} else if req.Action != "stop-v2" {
 					err = fmt.Errorf("invalid action")
 				}
 			}
@@ -170,6 +172,17 @@ func validate(req *request) error {
 	}
 	if req.Port < 0 || req.Port > 65535 {
 		return fmt.Errorf("invalid SOCKS port")
+	}
+	if req.DNSPort < 0 || req.DNSPort > 65535 {
+		return fmt.Errorf("invalid DNS port")
+	}
+	if len(req.Domains) > 32 {
+		return fmt.Errorf("too many split DNS domains")
+	}
+	for _, domain := range req.Domains {
+		if !validDomain(domain) {
+			return fmt.Errorf("invalid split DNS domain: %s", domain)
+		}
 	}
 	if len(req.Routes) > 64 {
 		return fmt.Errorf("too many routes")
@@ -223,6 +236,18 @@ func start(req request) error {
 			return fmt.Errorf("add route %s: %s", route, strings.TrimSpace(string(output)))
 		}
 	}
+	if req.DNSPort > 0 && len(req.Domains) > 0 {
+		if err := os.MkdirAll("/etc/resolver", 0755); err != nil {
+			return err
+		}
+		for _, domain := range req.Domains {
+			content := fmt.Sprintf("nameserver 127.0.0.1\nport %d\n", req.DNSPort)
+			if err := os.WriteFile(filepath.Join("/etc/resolver", domain), []byte(content), 0644); err != nil {
+				return err
+			}
+		}
+		_ = os.WriteFile(filepath.Join(stateDir, req.Key+".domains"), []byte(strings.Join(req.Domains, "\n")), 0600)
+	}
 	return nil
 }
 
@@ -238,6 +263,27 @@ func stop(req request) {
 		}
 	}
 	_ = os.Remove(pidPath)
+	domainsPath := filepath.Join(stateDir, req.Key+".domains")
+	if data, err := os.ReadFile(domainsPath); err == nil {
+		for _, domain := range strings.Split(string(data), "\n") {
+			if validDomain(domain) {
+				_ = os.Remove(filepath.Join("/etc/resolver", domain))
+			}
+		}
+	}
+	_ = os.Remove(domainsPath)
+}
+
+func validDomain(domain string) bool {
+	if domain == "" || len(domain) > 253 || strings.HasPrefix(domain, ".") || strings.HasSuffix(domain, ".") {
+		return false
+	}
+	for _, character := range domain {
+		if !(character == '-' || character == '.' || character >= 'a' && character <= 'z' || character >= 'A' && character <= 'Z' || character >= '0' && character <= '9') {
+			return false
+		}
+	}
+	return true
 }
 
 func deviceName(key string) string {

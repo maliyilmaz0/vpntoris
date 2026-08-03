@@ -25,6 +25,8 @@ RUN apt-get update && apt-get install -y \
     libcharon-extra-plugins \
     libstrongswan-extra-plugins \
     dante-server \
+    dnsmasq \
+    dnsutils \
     iproute2 \
     iptables \
     curl \

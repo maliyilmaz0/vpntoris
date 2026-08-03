@@ -1,4 +1,6 @@
 import SwiftUI
+import Security
+import UserNotifications
 
 struct VPNProfile: Codable, Identifiable, Hashable {
     var id: String { name }
@@ -10,7 +12,11 @@ struct VPNProfile: Codable, Identifiable, Hashable {
     var user = ""
     var password = ""
     var twoFactor: Bool?
+    var autoReconnect: Bool?
+    var connectOnLaunch: Bool?
     var routes = ""
+    var domains: String?
+    var dnsServers: String?
     var config = ""
     var ipsec: IPSecSettings?
 }
@@ -58,6 +64,7 @@ struct ProfileStatus: Codable, Identifiable {
     let routes: String
     let connected: Bool
     let twoFactor: Bool
+    let needsOtp: Bool
 }
 
 struct ActiveRoute: Codable, Identifiable { var id: String { profile + cidr }; let profile: String; let cidr: String; let port: String }
@@ -66,6 +73,20 @@ struct DockerStatus: Codable {
     let state: String
     let message: String
 }
+
+struct TrafficStatus: Codable, Identifiable {
+    var id: String { name }
+    let name: String
+    let received: UInt64
+    let sent: UInt64
+    let receiveBps: Double
+    let sendBps: Double
+    let duration: Int64
+}
+
+struct HistoryEntry: Codable, Identifiable { let id: String; let profile: String; let event: String; let time: String; let received: UInt64; let sent: UInt64 }
+struct RouteMatch: Codable, Identifiable { var id: String { profile + cidr }; let profile: String; let cidr: String; let prefix: Int; let connected: Bool }
+struct RouteCheck: Codable { let target: String; let matches: [RouteMatch]; let conflict: Bool }
 
 struct BrandIcon: View {
     let size: CGFloat
@@ -78,11 +99,35 @@ struct BrandIcon: View {
     }
 }
 
+enum ProfileKeychain {
+    static let service = "com.vpntoris.credentials"
+    static func read(profile: String, field: String) -> String {
+        let query: [String: Any] = [kSecClass as String: kSecClassGenericPassword, kSecAttrService as String: service, kSecAttrAccount as String: "\(profile).\(field)", kSecReturnData as String: true, kSecMatchLimit as String: kSecMatchLimitOne]
+        var result: CFTypeRef?
+        guard SecItemCopyMatching(query as CFDictionary, &result) == errSecSuccess, let data = result as? Data else { return "" }
+        return String(data: data, encoding: .utf8) ?? ""
+    }
+    static func write(_ value: String, profile: String, field: String) {
+        let base: [String: Any] = [kSecClass as String: kSecClassGenericPassword, kSecAttrService as String: service, kSecAttrAccount as String: "\(profile).\(field)"]
+        if value.isEmpty { SecItemDelete(base as CFDictionary); return }
+        let data = Data(value.utf8)
+        if SecItemUpdate(base as CFDictionary, [kSecValueData as String: data] as CFDictionary) == errSecItemNotFound {
+            var item = base; item[kSecValueData as String] = data; SecItemAdd(item as CFDictionary, nil)
+        }
+    }
+    static func delete(profile: String) {
+        write("", profile: profile, field: "password")
+        write("", profile: profile, field: "psk")
+    }
+}
+
 @MainActor final class VPNStore: ObservableObject {
     @Published var profiles: [ProfileStatus] = []
     @Published var error = ""
     @Published var busy: Set<String> = []
     @Published var docker = DockerStatus(state: "checking", message: "Checking Docker…")
+    @Published var traffic: [String: TrafficStatus] = [:]
+    @Published var trafficHistory: [String: [Double]] = [:]
     private let api = URL(string: "http://127.0.0.1:17984")!
 
     func refresh() async {
@@ -103,6 +148,19 @@ struct BrandIcon: View {
         }
     }
 
+    func refreshTraffic() async {
+        do {
+            let (data, _) = try await URLSession.shared.data(from: api.appending(path: "api/traffic"))
+            let items = try JSONDecoder().decode([TrafficStatus].self, from: data)
+            traffic = Dictionary(uniqueKeysWithValues: items.map { ($0.name, $0) })
+            for item in items {
+                var history = trafficHistory[item.name] ?? []
+                history.append(item.receiveBps + item.sendBps)
+                trafficHistory[item.name] = Array(history.suffix(30))
+            }
+        } catch {}
+    }
+
     func action(_ action: String, name: String, otp: String = "") async {
         busy.insert(name)
         defer { busy.remove(name) }
@@ -112,6 +170,10 @@ struct BrandIcon: View {
             var request = URLRequest(url: parts.url!)
             request.httpMethod = "POST"
             if !otp.isEmpty { request.setValue(otp, forHTTPHeaderField: "X-VPNToris-OTP") }
+            if action == "connect", let profile = storedProfile(named: name) {
+                request.setValue(profile.password, forHTTPHeaderField: "X-VPNToris-Password")
+                request.setValue(profile.ipsec?.preSharedKey ?? "", forHTTPHeaderField: "X-VPNToris-PSK")
+            }
             let (data, response) = try await URLSession.shared.data(for: request)
             guard (response as? HTTPURLResponse)?.statusCode == 204 else {
                 throw NSError(domain: "VPNToris", code: 1, userInfo: [NSLocalizedDescriptionKey: String(data: data, encoding: .utf8) ?? "Operation failed"])
@@ -134,7 +196,13 @@ struct BrandIcon: View {
         var configs = loadConfigs()
         if let oldName { configs.removeAll { $0.name == oldName } }
         configs.removeAll { $0.name == profile.name }
-        configs.append(profile)
+        ProfileKeychain.write(profile.password, profile: profile.name, field: "password")
+        ProfileKeychain.write(profile.ipsec?.preSharedKey ?? "", profile: profile.name, field: "psk")
+        if let oldName, oldName != profile.name { ProfileKeychain.delete(profile: oldName) }
+        var persisted = profile
+        persisted.password = ""
+        persisted.ipsec?.preSharedKey = ""
+        configs.append(persisted)
         let url = try configURL()
         try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
         try JSONEncoder.pretty.encode(configs).write(to: url, options: .atomic)
@@ -142,7 +210,38 @@ struct BrandIcon: View {
 
     private func loadConfigs() -> [VPNProfile] {
         guard let url = try? configURL(), let data = try? Data(contentsOf: url) else { return [] }
-        return (try? JSONDecoder().decode([VPNProfile].self, from: data)) ?? []
+        return ((try? JSONDecoder().decode([VPNProfile].self, from: data)) ?? []).map { stored in
+            var profile = stored
+            if profile.password.isEmpty { profile.password = ProfileKeychain.read(profile: profile.name, field: "password") }
+            if profile.ipsec != nil && profile.ipsec?.preSharedKey.isEmpty == true { profile.ipsec?.preSharedKey = ProfileKeychain.read(profile: profile.name, field: "psk") }
+            return profile
+        }
+    }
+
+    func deleteCredentials(named name: String) { ProfileKeychain.delete(profile: name) }
+
+    func migrateLegacyCredentials() {
+        guard let url = try? configURL(), let data = try? Data(contentsOf: url), var configs = try? JSONDecoder().decode([VPNProfile].self, from: data) else { return }
+        var changed = false
+        for index in configs.indices {
+            if !configs[index].password.isEmpty {
+                ProfileKeychain.write(configs[index].password, profile: configs[index].name, field: "password")
+                configs[index].password = ""
+                changed = true
+            }
+            if configs[index].ipsec?.preSharedKey.isEmpty == false {
+                ProfileKeychain.write(configs[index].ipsec?.preSharedKey ?? "", profile: configs[index].name, field: "psk")
+                configs[index].ipsec?.preSharedKey = ""
+                changed = true
+            }
+        }
+        if changed, let encoded = try? JSONEncoder.pretty.encode(configs) { try? encoded.write(to: url, options: .atomic) }
+    }
+
+    func connectLaunchProfiles() async {
+        for profile in loadConfigs() where profile.connectOnLaunch == true && profile.twoFactor != true {
+            if profiles.first(where: { $0.name == profile.name })?.connected != true { await action("connect", name: profile.name) }
+        }
     }
 
     private func configURL() throws -> URL {
@@ -181,7 +280,11 @@ struct ProfileEditor: View {
             TextField("Username", text: $profile.user)
             SecureField("Password", text: $profile.password)
             Toggle("Ask for 2FA / OTP when connecting", isOn: Binding(get: { profile.twoFactor ?? false }, set: { profile.twoFactor = $0 }))
+            Toggle("Reconnect automatically if the tunnel drops", isOn: Binding(get: { profile.autoReconnect ?? true }, set: { profile.autoReconnect = $0 }))
+            Toggle("Connect when VPNToris opens", isOn: Binding(get: { profile.connectOnLaunch ?? false }, set: { profile.connectOnLaunch = $0 })).disabled(profile.twoFactor ?? false)
             TextField("VPN routes (10.68.0.0/16, …)", text: $profile.routes)
+            TextField("Split DNS domains (corp.example.com, …)", text: Binding(get: { profile.domains ?? "" }, set: { profile.domains = $0 }))
+            TextField("VPN DNS servers (10.0.0.53, …)", text: Binding(get: { profile.dnsServers ?? "" }, set: { profile.dnsServers = $0 }))
             TextField("Description", text: $profile.description)
             if profile.type == "openvpn" { TextEditor(text: $profile.config).font(.system(.caption, design: .monospaced)).frame(height: 100).overlay(RoundedRectangle(cornerRadius: 6).stroke(.quaternary)) }
             if profile.type == "ipsec" { ipsecSettings }
@@ -239,6 +342,8 @@ struct ContentView: View {
     @State private var deleting: ProfileStatus?
     @State private var showTouchIDHelp = false
     @State private var diagnostics: DiagnosticsTarget?
+    @State private var showHistory = false
+    @State private var showRouteTest = false
     @State private var pendingOTP: Set<String> = []
     @State private var submittedOTP: Set<String> = []
     @State private var otpCodes: [String: String] = [:]
@@ -248,7 +353,7 @@ struct ContentView: View {
             HStack {
                 BrandIcon(size: 38)
                 VStack(alignment: .leading) { Text("VPNToris").font(.title2.bold()); Text("Private routes, isolated tunnels").font(.caption).foregroundStyle(.secondary) }
-                Spacer(); Button("Routes") { diagnostics = .routes }.buttonStyle(.bordered); Button { oldName = nil; editing = VPNProfile() } label: { Image(systemName: "plus") }.buttonStyle(.bordered)
+                Spacer(); Button("Routes") { diagnostics = .routes }.buttonStyle(.bordered); Button { showHistory = true } label: { Image(systemName: "clock.arrow.circlepath") }.buttonStyle(.bordered); Button { showRouteTest = true } label: { Image(systemName: "scope") }.buttonStyle(.bordered); Button { oldName = nil; editing = VPNProfile() } label: { Image(systemName: "plus") }.buttonStyle(.bordered)
             }.padding(18)
             Divider()
             if store.docker.state != "ready" {
@@ -302,6 +407,16 @@ struct ContentView: View {
                                 }
                             }
                             Label(profile.routes.isEmpty ? "No routes configured" : profile.routes, systemImage: "point.3.connected.trianglepath.dotted").font(.caption).foregroundStyle(.cyan)
+                            if profile.connected, let traffic = store.traffic[profile.name] {
+                                HStack(spacing: 12) {
+                                    Label(byteRate(traffic.receiveBps), systemImage: "arrow.down").foregroundStyle(.green)
+                                    Label(byteRate(traffic.sendBps), systemImage: "arrow.up").foregroundStyle(.blue)
+                                    Text("↓ \(byteCount(traffic.received))  ↑ \(byteCount(traffic.sent))")
+                                    Spacer()
+                                    Text(duration(traffic.duration)).foregroundStyle(.secondary)
+                                }.font(.caption.monospacedDigit())
+                                TrafficSparkline(values: store.trafficHistory[profile.name] ?? []).frame(height: 26)
+                            }
                             if pendingOTP.contains(profile.name) && !profile.connected {
                                 VStack(alignment: .leading, spacing: 8) {
                                     HStack { ProgressView().controlSize(.small); Text(submittedOTP.contains(profile.name) ? "OTP submitted, connecting…" : "Connecting — waiting for OTP").font(.caption).foregroundStyle(.secondary) }
@@ -323,19 +438,33 @@ struct ContentView: View {
             }
             Divider(); HStack { Circle().fill(store.docker.state == "ready" ? Color.green : Color.orange).frame(width: 7); Text(store.docker.state == "ready" ? "Docker ready" : "Docker unavailable").font(.caption).foregroundStyle(.secondary); Spacer(); Button("Touch ID") { showTouchIDHelp = true }.buttonStyle(.borderless); Button("Quit") { NSApplication.shared.terminate(nil) }.buttonStyle(.borderless) }.padding(12)
         }.frame(width: 410, height: 560).task {
+            store.migrateLegacyCredentials()
             await store.refresh()
+            await store.connectLaunchProfiles()
             await store.refreshDocker(retry: true)
             while store.docker.state == "checking" || store.docker.state == "building" {
                 try? await Task.sleep(for: .seconds(2))
                 await store.refreshDocker()
             }
+            while !Task.isCancelled {
+                await store.refreshTraffic()
+                await store.refresh()
+                for profile in store.profiles where profile.needsOtp && !pendingOTP.contains(profile.name) {
+                    pendingOTP.insert(profile.name)
+                    otpCodes[profile.name] = ""
+                    notifyOTP(profile.name)
+                }
+                try? await Task.sleep(for: .seconds(1))
+            }
         }
         .sheet(item: $editing) { value in ProfileEditor(profile: value, title: oldName == nil ? "Add VPN Profile" : "Edit VPN Profile") { profile in try? store.save(profile, replacing: oldName); Task { await store.refresh() } } }
         .sheet(isPresented: $showTouchIDHelp) { TouchIDHelpView() }
         .sheet(item: $diagnostics) { target in DiagnosticsView(store: store, target: target) }
+        .sheet(isPresented: $showHistory) { HistoryView() }
+        .sheet(isPresented: $showRouteTest) { RouteTestView() }
         .alert("Delete \(deleting?.name ?? "profile")?", isPresented: Binding(get: { deleting != nil }, set: { if !$0 { deleting = nil } })) {
             Button("Cancel", role: .cancel) { deleting = nil }
-            Button("Delete", role: .destructive) { if let p = deleting { Task { await store.action("delete", name: p.name) } }; deleting = nil }
+            Button("Delete", role: .destructive) { if let p = deleting { store.deleteCredentials(named: p.name); Task { await store.action("delete", name: p.name) } }; deleting = nil }
         }
     }
 
@@ -349,6 +478,23 @@ struct ContentView: View {
         }
     }
 
+    private func byteRate(_ value: Double) -> String { ByteCountFormatter.string(fromByteCount: Int64(value), countStyle: .file) + "/s" }
+    private func byteCount(_ value: UInt64) -> String { ByteCountFormatter.string(fromByteCount: Int64(value), countStyle: .file) }
+    private func duration(_ seconds: Int64) -> String {
+        let hours = seconds / 3600
+        let minutes = (seconds % 3600) / 60
+        let remaining = seconds % 60
+        return hours > 0 ? String(format: "%02d:%02d:%02d", hours, minutes, remaining) : String(format: "%02d:%02d", minutes, remaining)
+    }
+
+    private func notifyOTP(_ profile: String) {
+        let content = UNMutableNotificationContent()
+        content.title = "VPNToris needs an OTP"
+        content.body = "\(profile) is reconnecting. Open VPNToris and enter the new verification code."
+        content.sound = .default
+        UNUserNotificationCenter.current().add(UNNotificationRequest(identifier: "vpntoris-otp-\(profile)", content: content, trigger: nil))
+    }
+
     private func submitOTP(_ profile: ProfileStatus) {
         let code = (otpCodes[profile.name] ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
         guard !code.isEmpty else { return }; submittedOTP.insert(profile.name)
@@ -357,6 +503,58 @@ struct ContentView: View {
     private func cancelOTP(_ profile: ProfileStatus) {
         pendingOTP.remove(profile.name); submittedOTP.remove(profile.name); otpCodes[profile.name] = ""
         Task { await store.action("disconnect", name: profile.name) }
+    }
+}
+
+struct HistoryView: View {
+    @Environment(\.dismiss) private var dismiss
+    @State private var entries: [HistoryEntry] = []
+    var body: some View {
+        VStack(spacing: 12) {
+            HStack { Text("Connection History").font(.title2.bold()); Spacer(); Button("Clear", role: .destructive) { Task { await clear() } }; Button("Done") { dismiss() } }
+            List(entries) { entry in
+                HStack { Image(systemName: entry.event == "connected" ? "link.circle.fill" : "xmark.circle").foregroundStyle(entry.event == "connected" ? .green : .secondary); VStack(alignment: .leading) { Text(entry.profile).font(.headline); Text(entry.event.capitalized + " · " + entry.time).font(.caption).foregroundStyle(.secondary) }; Spacer(); Text("↓ \(ByteCountFormatter.string(fromByteCount: Int64(entry.received), countStyle: .file))  ↑ \(ByteCountFormatter.string(fromByteCount: Int64(entry.sent), countStyle: .file))").font(.caption.monospacedDigit()) }
+            }
+        }.padding(18).frame(width: 620, height: 460).task { await load() }
+    }
+    private func load() async { if let url = URL(string: "http://127.0.0.1:17984/api/history"), let (data, _) = try? await URLSession.shared.data(from: url) { entries = (try? JSONDecoder().decode([HistoryEntry].self, from: data)) ?? [] } }
+    private func clear() async { var request = URLRequest(url: URL(string: "http://127.0.0.1:17984/api/history")!); request.httpMethod = "DELETE"; _ = try? await URLSession.shared.data(for: request); await load() }
+}
+
+struct RouteTestView: View {
+    @Environment(\.dismiss) private var dismiss
+    @State private var target = ""
+    @State private var result: RouteCheck?
+    @State private var error = ""
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            HStack { Text("Route Tester").font(.title2.bold()); Spacer(); Button("Done") { dismiss() } }
+            HStack { TextField("Destination IPv4 address", text: $target).onSubmit { Task { await check() } }; Button("Check") { Task { await check() } }.buttonStyle(.borderedProminent) }
+            if !error.isEmpty { Text(error).foregroundStyle(.red) }
+            if let result {
+                if result.matches.isEmpty { VStack(spacing: 10) { Image(systemName: "questionmark.circle").font(.largeTitle); Text("No matching VPN route").font(.headline); Text(result.target + " uses the normal system route.").foregroundStyle(.secondary) }.frame(maxWidth: .infinity, maxHeight: .infinity) }
+                else { List(result.matches) { match in HStack { Image(systemName: match.connected ? "checkmark.circle.fill" : "circle").foregroundStyle(match.connected ? .green : .secondary); VStack(alignment: .leading) { Text(match.profile); Text(match.cidr).font(.caption.monospaced()).foregroundStyle(.secondary) }; Spacer(); Text("/\(match.prefix)") } }.overlay(alignment: .bottom) { if result.conflict { Label("Conflicting routes have the same prefix", systemImage: "exclamationmark.triangle.fill").foregroundStyle(.orange).padding() } } }
+            }
+        }.padding(18).frame(width: 540, height: 400)
+    }
+    private func check() async { do { var parts = URLComponents(string: "http://127.0.0.1:17984/api/route-check")!; parts.queryItems = [.init(name: "target", value: target)]; let (data, response) = try await URLSession.shared.data(from: parts.url!); guard (response as? HTTPURLResponse)?.statusCode == 200 else { throw NSError(domain: "VPNToris", code: 1, userInfo: [NSLocalizedDescriptionKey: String(data: data, encoding: .utf8) ?? "Route check failed"]) }; result = try JSONDecoder().decode(RouteCheck.self, from: data); error = "" } catch { self.error = error.localizedDescription; result = nil } }
+}
+
+struct TrafficSparkline: View {
+    let values: [Double]
+    var body: some View {
+        GeometryReader { geometry in
+            Canvas { context, size in
+                guard values.count > 1, let maximum = values.max(), maximum > 0 else { return }
+                var path = Path()
+                for (index, value) in values.enumerated() {
+                    let x = size.width * CGFloat(index) / CGFloat(values.count - 1)
+                    let y = size.height - size.height * CGFloat(value / maximum)
+                    if index == 0 { path.move(to: CGPoint(x: x, y: y)) } else { path.addLine(to: CGPoint(x: x, y: y)) }
+                }
+                context.stroke(path, with: .linearGradient(Gradient(colors: [.cyan, .purple]), startPoint: .zero, endPoint: CGPoint(x: size.width, y: 0)), lineWidth: 2)
+            }
+        }
     }
 }
 
@@ -397,6 +595,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory)
+        UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound, .badge]) { _, _ in }
+        VPNStore().migrateLegacyCredentials()
         let process = Process(); process.executableURL = Bundle.main.bundleURL.appending(path: "Contents/MacOS/vpntorisd"); process.arguments = ["--daemon", String(ProcessInfo.processInfo.processIdentifier)]; try? process.run(); daemon = process
 
 

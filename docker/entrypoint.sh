@@ -9,8 +9,15 @@ VPN_2FA=${VPN_2FA:-false}
 VPN_HOST=${VPN_HOST:-}
 VPN_PORT=${VPN_PORT:-443}
 VPN_NAME=${VPN_NAME:-vpn}
+VPN_DNS_SERVERS=${VPN_DNS_SERVERS:-}
 
 mkdir -p /logs
+
+if [ -n "$VPN_DNS_SERVERS" ]; then
+	printf 'no-resolv\nlisten-address=0.0.0.0\nport=53\n' > /etc/dnsmasq.d/vpntoris.conf
+	for server in ${VPN_DNS_SERVERS//,/ }; do printf 'server=%s\n' "$server" >> /etc/dnsmasq.d/vpntoris.conf; done
+	dnsmasq
+fi
 
 if [ "$VPN_2FA" = "true" ]; then
 	mkdir -p /run/vpntoris

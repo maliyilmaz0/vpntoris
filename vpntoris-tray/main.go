@@ -17,22 +17,26 @@ import (
 	"time"
 )
 
-const imageName = "vpntoris-client"
+const imageName = "vpntoris-client:next"
 
 var safeNamePattern = regexp.MustCompile(`[^a-z0-9_.-]+`)
 
 type VPNConfig struct {
-	Name        string       `json:"name"`
-	Description string       `json:"description"`
-	Type        string       `json:"type"`
-	Host        string       `json:"host"`
-	Port        string       `json:"port"`
-	User        string       `json:"user"`
-	Password    string       `json:"password"`
-	TwoFactor   bool         `json:"twoFactor"`
-	Routes      string       `json:"routes"`
-	Config      string       `json:"config"`
-	IPSec       *IPSecConfig `json:"ipsec,omitempty"`
+	Name            string       `json:"name"`
+	Description     string       `json:"description"`
+	Type            string       `json:"type"`
+	Host            string       `json:"host"`
+	Port            string       `json:"port"`
+	User            string       `json:"user"`
+	Password        string       `json:"password"`
+	TwoFactor       bool         `json:"twoFactor"`
+	AutoReconnect   bool         `json:"autoReconnect"`
+	ConnectOnLaunch bool         `json:"connectOnLaunch"`
+	Routes          string       `json:"routes"`
+	Domains         string       `json:"domains"`
+	DNSServers      string       `json:"dnsServers"`
+	Config          string       `json:"config"`
+	IPSec           *IPSecConfig `json:"ipsec,omitempty"`
 }
 
 type IPSecConfig struct {
@@ -88,6 +92,42 @@ var dockerBootstrap = struct {
 	Message string `json:"message"`
 }{State: "checking", Message: "Checking Docker…"}
 
+type trafficSnapshot struct {
+	Name       string  `json:"name"`
+	Received   uint64  `json:"received"`
+	Sent       uint64  `json:"sent"`
+	ReceiveBPS float64 `json:"receiveBps"`
+	SendBPS    float64 `json:"sendBps"`
+	Duration   int64   `json:"duration"`
+	updatedAt  time.Time
+}
+
+type historyEntry struct {
+	ID       string `json:"id"`
+	Profile  string `json:"profile"`
+	Event    string `json:"event"`
+	Time     string `json:"time"`
+	Received uint64 `json:"received"`
+	Sent     uint64 `json:"sent"`
+}
+
+var trafficState = struct {
+	sync.RWMutex
+	items map[string]trafficSnapshot
+}{items: make(map[string]trafficSnapshot)}
+
+var connectionIntent = struct {
+	sync.RWMutex
+	names    map[string]bool
+	busy     map[string]bool
+	profiles map[string]VPNConfig
+}{names: make(map[string]bool), busy: make(map[string]bool), profiles: make(map[string]VPNConfig)}
+
+var otpRequests = struct {
+	sync.RWMutex
+	names map[string]bool
+}{names: make(map[string]bool)}
+
 type proxyMapping struct {
 	port   string
 	routes []proxyRoute
@@ -114,6 +154,8 @@ func main() {
 		os.Exit(1)
 	}
 	go bootstrapDockerImage()
+	go monitorTraffic()
+	go monitorConnections()
 	go restoreHealthyRoutes()
 	if len(os.Args) > 2 && os.Args[1] == "--daemon" {
 		if parentPID, err := strconv.Atoi(os.Args[2]); err == nil {
@@ -203,7 +245,78 @@ func proxyPort(container string) (string, error) {
 	return address[separator+1:], nil
 }
 
+func containerPort(container, target string) (int, error) {
+	docker := dockerPath()
+	if docker == "" {
+		return 0, fmt.Errorf("docker is unavailable")
+	}
+	output, err := exec.Command(docker, "port", container, target).Output()
+	if err != nil {
+		return 0, err
+	}
+	address := strings.TrimSpace(strings.Split(string(output), "\n")[0])
+	separator := strings.LastIndex(address, ":")
+	if separator < 0 {
+		return 0, fmt.Errorf("invalid container port")
+	}
+	return strconv.Atoi(address[separator+1:])
+}
+
+func splitValues(value string) []string {
+	fields := strings.FieldsFunc(value, func(character rune) bool {
+		return character == ',' || character == ';' || character == '\n' || character == ' '
+	})
+	result := make([]string, 0, len(fields))
+	for _, field := range fields {
+		if trimmed := strings.TrimSpace(field); trimmed != "" {
+			result = append(result, trimmed)
+		}
+	}
+	return result
+}
+
+func resolveDomains(config VPNConfig) []string {
+	addresses := map[string]bool{}
+	for _, domain := range splitValues(config.Domains) {
+		output, err := exec.Command("docker", "exec", containerName(config.Name), "getent", "ahostsv4", domain).Output()
+		if err != nil {
+			continue
+		}
+		for _, line := range strings.Split(string(output), "\n") {
+			fields := strings.Fields(line)
+			if len(fields) > 0 && net.ParseIP(fields[0]).To4() != nil {
+				addresses[fields[0]] = true
+			}
+		}
+	}
+	result := make([]string, 0, len(addresses))
+	for address := range addresses {
+		result = append(result, address)
+	}
+	sort.Strings(result)
+	return result
+}
+
+func activateProfileRoutes(config VPNConfig, port string) error {
+	routeList := config.Routes
+	for _, server := range splitValues(config.DNSServers) {
+		routeList += "," + server + "/32"
+	}
+	for _, address := range resolveDomains(config) {
+		routeList += "," + address + "/32"
+	}
+	dnsPort := 0
+	if config.Domains != "" && config.DNSServers != "" {
+		dnsPort, _ = containerPort(containerName(config.Name), "53/udp")
+	}
+	return setSystemRoutesWithDNS(containerName(config.Name), port, routeList, config.Domains, dnsPort, true)
+}
+
 func setSystemRoutes(key, port, routeList string, enabled bool) error {
+	return setSystemRoutesWithDNS(key, port, routeList, "", 0, enabled)
+}
+
+func setSystemRoutesWithDNS(key, port, routeList, domains string, dnsPort int, enabled bool) error {
 	routes, err := parseRoutes(routeList)
 	if enabled && err != nil {
 		return err
@@ -215,7 +328,7 @@ func setSystemRoutes(key, port, routeList string, enabled bool) error {
 	if !enabled {
 		routerRoutes = previous.routes
 	}
-	if err := runRootRouter(key, port, routerRoutes, enabled); err != nil {
+	if err := runRootRouter(key, port, routerRoutes, splitValues(domains), dnsPort, enabled); err != nil {
 		return err
 	}
 	proxyState.Lock()
@@ -255,13 +368,15 @@ func setSystemRoutes(key, port, routeList string, enabled bool) error {
 }
 
 type routerRequest struct {
-	Action string   `json:"action"`
-	Key    string   `json:"key"`
-	Port   int      `json:"port"`
-	Routes []string `json:"routes"`
+	Action  string   `json:"action"`
+	Key     string   `json:"key"`
+	Port    int      `json:"port"`
+	Routes  []string `json:"routes"`
+	Domains []string `json:"domains"`
+	DNSPort int      `json:"dnsPort"`
 }
 
-func runRootRouter(key, port string, routes []proxyRoute, enabled bool) error {
+func runRootRouter(key, port string, routes []proxyRoute, domains []string, dnsPort int, enabled bool) error {
 	portNumber := 0
 	if enabled {
 		var err error
@@ -270,11 +385,11 @@ func runRootRouter(key, port string, routes []proxyRoute, enabled bool) error {
 			return fmt.Errorf("invalid VPN SOCKS port: %s", port)
 		}
 	}
-	action := "stop"
+	action := "stop-v2"
 	if enabled {
-		action = "start"
+		action = "start-v2"
 	}
-	request := routerRequest{Action: action, Key: key, Port: portNumber}
+	request := routerRequest{Action: action, Key: key, Port: portNumber, Domains: domains, DNSPort: dnsPort}
 	for _, route := range routes {
 		request.Routes = append(request.Routes, fmt.Sprintf("%s/%d", route.network, route.prefix))
 	}
@@ -367,6 +482,9 @@ func startPACServer() error {
 	mux.HandleFunc("/api/logs", handleLogsAPI)
 	mux.HandleFunc("/api/routes", handleRoutesAPI)
 	mux.HandleFunc("/api/docker", handleDockerAPI)
+	mux.HandleFunc("/api/traffic", handleTrafficAPI)
+	mux.HandleFunc("/api/history", handleHistoryAPI)
+	mux.HandleFunc("/api/route-check", handleRouteCheckAPI)
 	mux.HandleFunc("/proxy.pac", func(response http.ResponseWriter, _ *http.Request) {
 		proxyState.RLock()
 		type pacRoute struct {
@@ -400,6 +518,131 @@ func startPACServer() error {
 	go func() { _ = http.Serve(listener, mux) }()
 	go monitorActiveProxy()
 	return nil
+}
+
+func handleTrafficAPI(response http.ResponseWriter, _ *http.Request) {
+	trafficState.RLock()
+	items := make([]trafficSnapshot, 0, len(trafficState.items))
+	for _, item := range trafficState.items {
+		items = append(items, item)
+	}
+	trafficState.RUnlock()
+	sort.Slice(items, func(i, j int) bool { return items[i].Name < items[j].Name })
+	response.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(response).Encode(items)
+}
+
+func monitorTraffic() {
+	for {
+		configs, _ := loadConfigs()
+		seen := make(map[string]bool)
+		for _, config := range configs {
+			container := containerName(config.Name)
+			if !containerRunning(container) {
+				continue
+			}
+			received, sent, err := containerTraffic(container)
+			if err != nil {
+				continue
+			}
+			seen[config.Name] = true
+			now := time.Now()
+			trafficState.Lock()
+			previous := trafficState.items[config.Name]
+			item := trafficSnapshot{Name: config.Name, Received: received, Sent: sent, updatedAt: now, Duration: containerDuration(container)}
+			if !previous.updatedAt.IsZero() {
+				seconds := now.Sub(previous.updatedAt).Seconds()
+				if seconds > 0 && received >= previous.Received && sent >= previous.Sent {
+					item.ReceiveBPS = float64(received-previous.Received) / seconds
+					item.SendBPS = float64(sent-previous.Sent) / seconds
+				}
+			}
+			trafficState.items[config.Name] = item
+			trafficState.Unlock()
+		}
+		trafficState.Lock()
+		for name := range trafficState.items {
+			if !seen[name] {
+				delete(trafficState.items, name)
+			}
+		}
+		trafficState.Unlock()
+		time.Sleep(time.Second)
+	}
+}
+
+func containerTraffic(container string) (uint64, uint64, error) {
+	docker := dockerPath()
+	if docker == "" {
+		return 0, 0, fmt.Errorf("docker is unavailable")
+	}
+	output, err := exec.Command(docker, "stats", "--no-stream", "--format", "{{.NetIO}}", container).Output()
+	if err != nil {
+		return 0, 0, err
+	}
+	parts := strings.Split(strings.TrimSpace(string(output)), "/")
+	if len(parts) != 2 {
+		return 0, 0, fmt.Errorf("invalid docker traffic output")
+	}
+	received, err := parseByteSize(parts[0])
+	if err != nil {
+		return 0, 0, err
+	}
+	sent, err := parseByteSize(parts[1])
+	return received, sent, err
+}
+
+func parseByteSize(value string) (uint64, error) {
+	value = strings.TrimSpace(value)
+	index := 0
+	for index < len(value) && ((value[index] >= '0' && value[index] <= '9') || value[index] == '.') {
+		index++
+	}
+	if index == 0 {
+		return 0, fmt.Errorf("invalid byte size")
+	}
+	number, err := strconv.ParseFloat(value[:index], 64)
+	if err != nil {
+		return 0, err
+	}
+	unit := strings.ToUpper(strings.TrimSpace(value[index:]))
+	multiplier := float64(1)
+	switch unit {
+	case "KB":
+		multiplier = 1e3
+	case "MB":
+		multiplier = 1e6
+	case "GB":
+		multiplier = 1e9
+	case "TB":
+		multiplier = 1e12
+	case "KIB":
+		multiplier = 1024
+	case "MIB":
+		multiplier = 1024 * 1024
+	case "GIB":
+		multiplier = 1024 * 1024 * 1024
+	case "B", "":
+	default:
+		return 0, fmt.Errorf("unknown byte unit: %s", unit)
+	}
+	return uint64(number * multiplier), nil
+}
+
+func containerDuration(container string) int64 {
+	docker := dockerPath()
+	if docker == "" {
+		return 0
+	}
+	output, err := exec.Command(docker, "inspect", "--format", "{{.State.StartedAt}}", container).Output()
+	if err != nil {
+		return 0
+	}
+	started, err := time.Parse(time.RFC3339Nano, strings.TrimSpace(string(output)))
+	if err != nil {
+		return 0
+	}
+	return int64(time.Since(started).Seconds())
 }
 
 func handleDockerAPI(response http.ResponseWriter, request *http.Request) {
@@ -462,7 +705,7 @@ func restoreHealthyRoutes() {
 		if err != nil {
 			continue
 		}
-		_ = setSystemRoutes(key, port, config.Routes, true)
+		_ = activateProfileRoutes(config, port)
 	}
 }
 
@@ -474,6 +717,7 @@ type profileView struct {
 	Routes      string `json:"routes"`
 	Connected   bool   `json:"connected"`
 	TwoFactor   bool   `json:"twoFactor"`
+	NeedsOTP    bool   `json:"needsOtp"`
 }
 
 func handleProfilesAPI(response http.ResponseWriter, _ *http.Request) {
@@ -485,11 +729,15 @@ func handleProfilesAPI(response http.ResponseWriter, _ *http.Request) {
 	}
 	profiles := make([]profileView, 0, len(configs))
 	for _, config := range configs {
+		otpRequests.RLock()
+		needsOTP := otpRequests.names[config.Name]
+		otpRequests.RUnlock()
 		profiles = append(profiles, profileView{
 			Name: config.Name, Description: config.Description, Type: config.Type,
 			Host: config.Host, Routes: config.Routes,
 			Connected: containerHealthy(containerName(config.Name)),
 			TwoFactor: config.TwoFactor,
+			NeedsOTP:  needsOTP,
 		})
 	}
 	response.Header().Set("Content-Type", "application/json")
@@ -522,17 +770,45 @@ func handleActionAPI(response http.ResponseWriter, request *http.Request) {
 	}
 	switch action {
 	case "connect":
+		selected.Password = request.Header.Get("X-VPNToris-Password")
+		if selected.IPSec != nil {
+			selected.IPSec.PreSharedKey = request.Header.Get("X-VPNToris-PSK")
+		}
 		err = connectVPN(*selected)
+		if err == nil && selected.AutoReconnect {
+			connectionIntent.Lock()
+			connectionIntent.names[selected.Name] = true
+			connectionIntent.profiles[selected.Name] = *selected
+			connectionIntent.Unlock()
+		}
+		if err == nil {
+			recordHistory(selected.Name, "connected")
+		}
 	case "otp":
 		err = sendOTP(*selected, request.Header.Get("X-VPNToris-OTP"))
+		if err == nil {
+			otpRequests.Lock()
+			delete(otpRequests.names, selected.Name)
+			otpRequests.Unlock()
+		}
 	case "disconnect":
+		connectionIntent.Lock()
+		delete(connectionIntent.names, selected.Name)
+		delete(connectionIntent.profiles, selected.Name)
+		connectionIntent.Unlock()
+		otpRequests.Lock()
+		delete(otpRequests.names, selected.Name)
+		otpRequests.Unlock()
 		_ = setSystemRoutes(containerName(selected.Name), "", "", false)
 		err = disconnectVPN(containerName(selected.Name))
+		if err == nil {
+			recordHistory(selected.Name, "disconnected")
+		}
 	case "route":
 		var port string
 		port, err = proxyPort(containerName(selected.Name))
 		if err == nil {
-			err = setSystemRoutes(containerName(selected.Name), port, selected.Routes, true)
+			err = activateProfileRoutes(*selected, port)
 		}
 	case "delete":
 		_ = setSystemRoutes(containerName(selected.Name), "", "", false)
@@ -548,6 +824,122 @@ func handleActionAPI(response http.ResponseWriter, request *http.Request) {
 		return
 	}
 	response.WriteHeader(http.StatusNoContent)
+}
+
+func historyPath() string { return filepath.Join(filepath.Dir(configPath), "history.json") }
+
+func loadHistory() []historyEntry {
+	data, err := os.ReadFile(historyPath())
+	if err != nil {
+		return []historyEntry{}
+	}
+	var entries []historyEntry
+	if json.Unmarshal(data, &entries) != nil {
+		return []historyEntry{}
+	}
+	return entries
+}
+
+func recordHistory(profile, event string) {
+	entry := historyEntry{ID: fmt.Sprintf("%d-%s", time.Now().UnixNano(), profile), Profile: profile, Event: event, Time: time.Now().Format(time.RFC3339)}
+	trafficState.RLock()
+	if item, ok := trafficState.items[profile]; ok {
+		entry.Received, entry.Sent = item.Received, item.Sent
+	}
+	trafficState.RUnlock()
+	entries := append(loadHistory(), entry)
+	if len(entries) > 1000 {
+		entries = entries[len(entries)-1000:]
+	}
+	if data, err := json.MarshalIndent(entries, "", "  "); err == nil {
+		_ = os.WriteFile(historyPath(), data, 0600)
+	}
+}
+
+func handleHistoryAPI(response http.ResponseWriter, request *http.Request) {
+	if request.Method == http.MethodDelete {
+		_ = os.WriteFile(historyPath(), []byte("[]\n"), 0600)
+		response.WriteHeader(http.StatusNoContent)
+		return
+	}
+	entries := loadHistory()
+	for left, right := 0, len(entries)-1; left < right; left, right = left+1, right-1 {
+		entries[left], entries[right] = entries[right], entries[left]
+	}
+	response.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(response).Encode(entries)
+}
+
+func handleRouteCheckAPI(response http.ResponseWriter, request *http.Request) {
+	target := net.ParseIP(strings.TrimSpace(request.URL.Query().Get("target"))).To4()
+	if target == nil {
+		http.Error(response, "enter a valid IPv4 address", http.StatusBadRequest)
+		return
+	}
+	configs, err := loadConfigs()
+	if err != nil {
+		http.Error(response, err.Error(), 500)
+		return
+	}
+	type match struct {
+		Profile   string `json:"profile"`
+		CIDR      string `json:"cidr"`
+		Prefix    int    `json:"prefix"`
+		Connected bool   `json:"connected"`
+	}
+	matches := []match{}
+	for _, config := range configs {
+		routes, _ := parseRoutes(config.Routes)
+		for _, route := range routes {
+			_, block, _ := net.ParseCIDR(fmt.Sprintf("%s/%d", route.network, route.prefix))
+			if block.Contains(target) {
+				matches = append(matches, match{config.Name, fmt.Sprintf("%s/%d", route.network, route.prefix), route.prefix, containerHealthy(containerName(config.Name))})
+			}
+		}
+	}
+	sort.Slice(matches, func(i, j int) bool { return matches[i].Prefix > matches[j].Prefix })
+	response.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(response).Encode(map[string]any{"target": target.String(), "matches": matches, "conflict": len(matches) > 1 && matches[0].Prefix == matches[1].Prefix})
+}
+
+func monitorConnections() {
+	time.Sleep(3 * time.Second)
+	for {
+		configs, err := loadConfigs()
+		if err == nil {
+			for _, config := range configs {
+				container := containerName(config.Name)
+				connectionIntent.RLock()
+				wanted := connectionIntent.names[config.Name]
+				busy := connectionIntent.busy[config.Name]
+				profile, cached := connectionIntent.profiles[config.Name]
+				connectionIntent.RUnlock()
+				if !wanted || !cached || busy || containerHealthy(container) {
+					continue
+				}
+				connectionIntent.Lock()
+				connectionIntent.busy[config.Name] = true
+				connectionIntent.Unlock()
+				go func(profile VPNConfig) {
+					if profile.TwoFactor {
+						otpRequests.Lock()
+						otpRequests.names[profile.Name] = true
+						otpRequests.Unlock()
+					}
+					err := connectVPN(profile)
+					if err != nil {
+						otpRequests.Lock()
+						delete(otpRequests.names, profile.Name)
+						otpRequests.Unlock()
+					}
+					connectionIntent.Lock()
+					delete(connectionIntent.busy, profile.Name)
+					connectionIntent.Unlock()
+				}(profile)
+			}
+		}
+		time.Sleep(5 * time.Second)
+	}
 }
 
 func handleLogsAPI(response http.ResponseWriter, request *http.Request) {
@@ -683,6 +1075,7 @@ func connectVPN(config VPNConfig, otp ...string) error {
 		"--cap-add=NET_ADMIN", "--device=/dev/net/tun",
 		"--label", "vpntoris=true", "--label", "vpntoris.profile=" + config.Name,
 		"-p", "127.0.0.1::1080",
+		"-p", "127.0.0.1::53/udp",
 		"-e", "VPN_TYPE=" + config.Type,
 		"-e", "VPN_NAME=" + config.Name,
 		"-e", "VPN_HOST=" + config.Host,
@@ -690,6 +1083,7 @@ func connectVPN(config VPNConfig, otp ...string) error {
 		"-e", "VPN_USER=" + config.User,
 		"-e", "VPN_PASS=" + config.Password,
 		"-e", fmt.Sprintf("VPN_2FA=%t", config.TwoFactor),
+		"-e", "VPN_DNS_SERVERS=" + config.DNSServers,
 	}
 	if config.Type == "openfortivpn" {
 		args = append(args, "--cap-add=MKNOD", "--device-cgroup-rule=c 108:0 rwm")

@@ -38,6 +38,16 @@ func TestParseRoutes(t *testing.T) {
 	}
 }
 
+func TestParseByteSize(t *testing.T) {
+	tests := map[string]uint64{"12B": 12, "1.5kB": 1500, "2MiB": 2 * 1024 * 1024, "3.2GB": 3200000000}
+	for input, expected := range tests {
+		value, err := parseByteSize(input)
+		if err != nil || value != expected {
+			t.Fatalf("parseByteSize(%q) = %d, %v; want %d", input, value, err, expected)
+		}
+	}
+}
+
 func TestBuildIPSecProposals(t *testing.T) {
 	got, err := buildProposals("aes256,aes256gcm16", "sha256", "prfsha256", "14,20", true)
 	if err != nil {

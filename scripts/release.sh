@@ -37,6 +37,7 @@ export SWIFT_MODULECACHE_PATH=${SWIFT_MODULECACHE_PATH:-/tmp/vpntoris-release-sw
     go test ./...
     CGO_ENABLED=1 GOARCH="$ARCH" go build -trimpath -ldflags "-s -w" -o "$APP/Contents/MacOS/vpntorisd" .
     CGO_ENABLED=0 GOARCH="$ARCH" go build -trimpath -ldflags "-s -w" -o "$APP/Contents/MacOS/vpntoris-route-helper" ./routerhelper
+    CGO_ENABLED=0 GOARCH="$ARCH" go build -trimpath -ldflags "-s -w" -o "$APP/Contents/MacOS/vpntorisctl" ./cli
 )
 
 xcrun swiftc -O -whole-module-optimization -parse-as-library \
@@ -62,13 +63,13 @@ iconutil -c icns "$ICONSET" -o "$APP/Contents/Resources/AppIcon.icns"
 chmod 755 "$APP/Contents/MacOS/"*
 
 if [[ "$UNSIGNED" == false ]]; then
-    for binary in tun2socks vpntoris-route-helper vpntorisd VPNToris; do
+    for binary in tun2socks vpntoris-route-helper vpntorisd vpntorisctl VPNToris; do
         codesign --force --options runtime --timestamp --sign "$SIGN_IDENTITY" "$APP/Contents/MacOS/$binary"
     done
     codesign --force --deep --options runtime --timestamp --sign "$SIGN_IDENTITY" "$APP"
     codesign --verify --deep --strict --verbose=2 "$APP"
 else
-    for binary in tun2socks vpntoris-route-helper vpntorisd VPNToris; do
+    for binary in tun2socks vpntoris-route-helper vpntorisd vpntorisctl VPNToris; do
         codesign --remove-signature "$APP/Contents/MacOS/$binary" 2>/dev/null || true
     done
     codesign --remove-signature "$APP" 2>/dev/null || true

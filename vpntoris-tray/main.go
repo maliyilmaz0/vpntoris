@@ -1,6 +1,8 @@
 package main
 
 import (
+	"archive/zip"
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"net"
@@ -499,6 +501,7 @@ func startPACServer() error {
 	mux.HandleFunc("/api/route-check", handleRouteCheckAPI)
 	mux.HandleFunc("/api/recover", handleRecoverAPI)
 	mux.HandleFunc("/api/flows", handleFlowsAPI)
+	mux.HandleFunc("/api/diagnostics", handleDiagnosticsAPI)
 	mux.HandleFunc("/proxy.pac", func(response http.ResponseWriter, _ *http.Request) {
 		proxyState.RLock()
 		type pacRoute struct {
@@ -532,6 +535,90 @@ func startPACServer() error {
 	go func() { _ = http.Serve(listener, mux) }()
 	go monitorActiveProxy()
 	return nil
+}
+
+func handleDiagnosticsAPI(response http.ResponseWriter, _ *http.Request) {
+	buffer := &bytes.Buffer{}
+	archive := zip.NewWriter(buffer)
+	configs, _ := loadConfigs()
+	for index := range configs {
+		configs[index].Password = ""
+		configs[index].Config = ""
+		if configs[index].IPSec != nil {
+			configs[index].IPSec.PreSharedKey = ""
+		}
+	}
+	dockerBootstrap.RLock()
+	dockerStatus := struct {
+		State   string `json:"state"`
+		Message string `json:"message"`
+	}{dockerBootstrap.State, sanitizeDiagnosticText(dockerBootstrap.Message)}
+	dockerBootstrap.RUnlock()
+	trafficState.RLock()
+	traffic := make([]trafficSnapshot, 0, len(trafficState.items))
+	for _, item := range trafficState.items {
+		traffic = append(traffic, item)
+	}
+	trafficState.RUnlock()
+	summary := struct {
+		Created  string            `json:"created"`
+		Version  string            `json:"version"`
+		OS       string            `json:"os"`
+		Docker   any               `json:"docker"`
+		Profiles []VPNConfig       `json:"profiles"`
+		Traffic  []trafficSnapshot `json:"traffic"`
+	}{time.Now().Format(time.RFC3339), "next", "macOS", dockerStatus, configs, traffic}
+	data, _ := json.MarshalIndent(summary, "", "  ")
+	writeDiagnosticFile(archive, "summary.json", data)
+	writeDiagnosticCommand(archive, "system.txt", "/usr/bin/uname", "-a")
+	writeDiagnosticCommand(archive, "routes.txt", "/usr/sbin/netstat", "-rn", "-f", "inet")
+	writeDiagnosticCommand(archive, "dns.txt", "/usr/sbin/scutil", "--dns")
+	if docker := dockerPath(); docker != "" {
+		writeDiagnosticCommand(archive, "docker-containers.txt", docker, "ps", "-a", "--filter", "label=vpntoris=true", "--format", "{{.Names}}\t{{.Status}}\t{{.Image}}")
+		for _, config := range configs {
+			output, _ := exec.Command(docker, "logs", "--tail", "500", containerName(config.Name)).CombinedOutput()
+			writeDiagnosticFile(archive, "logs/"+safeFileName(config.Name)+".log", []byte(sanitizeDiagnosticText(string(output))))
+		}
+	}
+	_ = archive.Close()
+	response.Header().Set("Content-Type", "application/zip")
+	response.Header().Set("Content-Disposition", `attachment; filename="VPNToris-Diagnostics.zip"`)
+	response.Header().Set("Cache-Control", "no-store")
+	_, _ = response.Write(buffer.Bytes())
+}
+
+func writeDiagnosticCommand(archive *zip.Writer, name, command string, arguments ...string) {
+	output, err := exec.Command(command, arguments...).CombinedOutput()
+	if err != nil {
+		output = append(output, []byte("\n"+err.Error())...)
+	}
+	writeDiagnosticFile(archive, name, []byte(sanitizeDiagnosticText(string(output))))
+}
+
+func writeDiagnosticFile(archive *zip.Writer, name string, data []byte) {
+	file, err := archive.Create(name)
+	if err == nil {
+		_, _ = file.Write(data)
+	}
+}
+
+func safeFileName(value string) string {
+	name := safeNamePattern.ReplaceAllString(strings.ToLower(value), "-")
+	if name == "" {
+		return "profile"
+	}
+	return name
+}
+
+func sanitizeDiagnosticText(value string) string {
+	patterns := []*regexp.Regexp{
+		regexp.MustCompile(`(?i)(password|passwd|secret|psk|token|otp|authorization)(\s*[=:]\s*|\s+)[^\s,;]+`),
+		regexp.MustCompile(`(?i)(--password|--passwd|--secret|--psk|--token|--otp)\s+[^\s]+`),
+	}
+	for _, pattern := range patterns {
+		value = pattern.ReplaceAllString(value, "$1$2[REDACTED]")
+	}
+	return value
 }
 
 func handleFlowsAPI(response http.ResponseWriter, _ *http.Request) {

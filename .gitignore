@@ -28,3 +28,4 @@ node_modules/
 
 /assets/vpntoris-logo-source.png
 *.iconset/
+/TODO.md

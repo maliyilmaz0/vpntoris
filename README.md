@@ -19,7 +19,12 @@ The user interface is a native SwiftUI tray app. A local Go service manages Dock
 - Fortinet SSL VPN (`openfortivpn`), FortiClient-compatible IPsec, OpenConnect and OpenVPN profiles
 - IKEv1/IKEv2, Main/Aggressive mode, XAuth/EAP, Mode Config, NAT-T, DPD, Phase 1/2 proposals, PFS and common encryption/DH groups
 - Inline OTP flow after negotiation starts, including cancel/retry controls
-- Active route and container log views
+- Live per-profile traffic counters, transfer rates and connection history
+- Active route, per-process connection and container log views
+- FortiClient and OpenVPN profile import with review before saving
+- Sanitized diagnostics ZIP export for support and troubleshooting
+- Verified update downloads using the SHA-256 file attached to each GitHub release
+- Bundled `vpntorisctl` command-line client
 - Per-profile edit and delete actions
 - Embedded route helper and `tun2socks`; no separate system extension package
 - Signed and notarized macOS release workflow
@@ -51,10 +56,39 @@ Enable **Ask for 2FA / OTP** on the profile. Start the connection first; when th
 
 ## Security notes
 
-- Profiles are stored for the current user at `~/Library/Application Support/VPNToris/configs.json` with user-only file permissions. Credentials are currently present in that file in plaintext; protect the macOS account and do not share the file. Keychain storage is planned.
+- Profiles are stored for the current user at `~/Library/Application Support/VPNToris/configs.json` with user-only file permissions. Passwords and pre-shared keys are stored in macOS Keychain and are removed from the profile file.
 - The local management API listens only on `127.0.0.1:17984`.
 - The privileged helper accepts a limited route start/stop protocol over `/var/run/vpntoris/router.sock` and validates requested CIDRs and ports.
+- Diagnostics export excludes Keychain credentials and container environments, clears legacy credential fields and masks password, secret, PSK, token and OTP patterns in collected output.
+- The updater verifies a downloaded DMG against the release's SHA-256 asset before saving it. Installation remains an explicit user action.
 - Local profile files, logs, build products and secret files are excluded from Git. Never commit exported VPN configurations.
+
+## Profile import
+
+Choose **Import VPN Profile…** from the tray menu to select an OpenVPN `.ovpn` file or a FortiClient XML configuration. VPNToris extracts non-secret connection fields and opens the normal editor for review. Add the destination CIDRs and credentials before saving. Imported files are never copied into the repository.
+
+## Command line
+
+The application bundle contains `vpntorisctl`. Install a convenient symlink after copying VPNToris to Applications:
+
+```bash
+sudo ln -sf /Applications/VPNToris.app/Contents/MacOS/vpntorisctl /usr/local/bin/vpntorisctl
+vpntorisctl profiles
+vpntorisctl connect "Profile Name"
+vpntorisctl flows
+vpntorisctl check-route 10.38.1.251
+vpntorisctl disconnect "Profile Name"
+```
+
+The tray application must be running because the CLI talks to its localhost controller. Set `VPNTORIS_PASSWORD` when connecting and also set `VPNTORIS_PSK` for a pre-shared-key IPsec profile. Credentials are never accepted as command-line arguments or stored by the CLI.
+
+## Diagnostics
+
+Choose **Export Diagnostics…** from the tray menu to create a ZIP containing a sanitized summary, route and DNS state, Docker container status and the last 500 lines of each VPNToris container log. Review the archive before sharing it because gateway names, usernames, private CIDRs and hostnames may still be operationally sensitive even though credential values are removed.
+
+## Updates
+
+VPNToris checks the latest GitHub release in the background and also provides **Check for Updates…** in the tray menu. It downloads only a DMG that has a matching `.sha256` release asset, verifies the digest locally and saves the installer under `~/Downloads/VPNToris Updates`. The running application is not silently replaced.
 
 ## Build from source
 
@@ -79,7 +113,7 @@ The unsigned DMG is written to `dist/`. It deliberately contains no Apple Develo
 ```bash
 APP="build/release/VPNToris.app"
 IDENTITY="Developer ID Application: YOUR NAME (TEAMID)"
-for BIN in tun2socks vpntoris-route-helper vpntorisd VPNToris; do
+for BIN in tun2socks vpntoris-route-helper vpntorisd vpntorisctl VPNToris; do
   codesign --force --options runtime --timestamp --sign "$IDENTITY" "$APP/Contents/MacOS/$BIN"
 done
 codesign --force --deep --options runtime --timestamp --sign "$IDENTITY" "$APP"

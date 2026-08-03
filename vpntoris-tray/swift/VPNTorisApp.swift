@@ -1,6 +1,8 @@
 import SwiftUI
 import Security
 import UserNotifications
+import UniformTypeIdentifiers
+import CryptoKit
 
 struct VPNProfile: Codable, Identifiable, Hashable {
     var id: String { name }
@@ -88,6 +90,69 @@ struct HistoryEntry: Codable, Identifiable { let id: String; let profile: String
 struct RouteMatch: Codable, Identifiable { var id: String { profile + cidr }; let profile: String; let cidr: String; let prefix: Int; let connected: Bool }
 struct RouteCheck: Codable { let target: String; let matches: [RouteMatch]; let conflict: Bool }
 struct ActiveFlow: Codable, Identifiable { let id: String; let profile: String; let process: String; let pid: Int; let local: String; let remote: String; let remoteIp: String; let port: Int; let `protocol`: String }
+
+struct ReleaseAsset: Codable { let name: String; let browserDownloadUrl: URL; enum CodingKeys: String, CodingKey { case name; case browserDownloadUrl = "browser_download_url" } }
+struct GitHubRelease: Codable { let tagName: String; let name: String?; let htmlUrl: URL; let assets: [ReleaseAsset]; enum CodingKeys: String, CodingKey { case tagName = "tag_name"; case name; case htmlUrl = "html_url"; case assets } }
+
+@MainActor final class UpdateChecker: ObservableObject {
+    @Published var release: GitHubRelease?
+    @Published var state = "Ready to check"
+    @Published var checking = false
+    @Published var downloading = false
+    @Published var downloadedFile: URL?
+    var currentVersion: String { Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "0.0.0" }
+    var updateAvailable: Bool { guard let release else { return false }; return version(release.tagName, isNewerThan: currentVersion) }
+
+    func check(silent: Bool = false) async {
+        checking = true
+        if !silent { state = "Checking GitHub Releases…" }
+        defer { checking = false }
+        do {
+            var request = URLRequest(url: URL(string: "https://api.github.com/repos/maliyilmaz0/vpntoris/releases/latest")!)
+            request.setValue("application/vnd.github+json", forHTTPHeaderField: "Accept")
+            request.setValue("VPNToris/\(currentVersion)", forHTTPHeaderField: "User-Agent")
+            let (data, response) = try await URLSession.shared.data(for: request)
+            guard (response as? HTTPURLResponse)?.statusCode == 200 else { throw NSError(domain: "VPNToris", code: 2, userInfo: [NSLocalizedDescriptionKey: "GitHub did not return a release."]) }
+            release = try JSONDecoder().decode(GitHubRelease.self, from: data)
+            state = updateAvailable ? "Version \(release?.tagName ?? "") is available" : "VPNToris is up to date"
+        } catch {
+            if !silent { state = error.localizedDescription }
+        }
+    }
+
+    func download() async {
+        guard let release, let disk = release.assets.first(where: { $0.name.hasSuffix(".dmg") }), let checksum = release.assets.first(where: { $0.name == disk.name + ".sha256" || $0.name.hasSuffix(".dmg.sha256") }) else { state = "This release does not include a DMG and SHA-256 checksum."; return }
+        downloading = true
+        state = "Downloading \(disk.name)…"
+        defer { downloading = false }
+        do {
+            async let diskResult = URLSession.shared.data(from: disk.browserDownloadUrl)
+            async let checksumResult = URLSession.shared.data(from: checksum.browserDownloadUrl)
+            let ((diskData, diskResponse), (checksumData, checksumResponse)) = try await (diskResult, checksumResult)
+            guard (diskResponse as? HTTPURLResponse)?.statusCode == 200, (checksumResponse as? HTTPURLResponse)?.statusCode == 200 else { throw NSError(domain: "VPNToris", code: 3, userInfo: [NSLocalizedDescriptionKey: "Release download failed."]) }
+            let expected = String(decoding: checksumData, as: UTF8.self).split(whereSeparator: { $0 == " " || $0 == "\t" || $0 == "\n" }).first.map(String.init)?.lowercased() ?? ""
+            let actual = SHA256.hash(data: diskData).map { String(format: "%02x", $0) }.joined()
+            guard expected.count == 64, expected == actual else { throw NSError(domain: "VPNToris", code: 4, userInfo: [NSLocalizedDescriptionKey: "SHA-256 verification failed. The file was not saved."]) }
+            let directory = FileManager.default.urls(for: .downloadsDirectory, in: .userDomainMask)[0].appending(path: "VPNToris Updates", directoryHint: .isDirectory)
+            try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+            let destination = directory.appending(path: disk.name)
+            try diskData.write(to: destination, options: .atomic)
+            downloadedFile = destination
+            state = "Downloaded and SHA-256 verified"
+        } catch { state = error.localizedDescription }
+    }
+
+    private func version(_ candidate: String, isNewerThan current: String) -> Bool {
+        let left = candidate.trimmingCharacters(in: CharacterSet(charactersIn: "vV")).split(separator: ".").map { Int($0.prefix(while: { $0.isNumber })) ?? 0 }
+        let right = current.split(separator: ".").map { Int($0.prefix(while: { $0.isNumber })) ?? 0 }
+        for index in 0..<max(left.count, right.count) {
+            let a = index < left.count ? left[index] : 0
+            let b = index < right.count ? right[index] : 0
+            if a != b { return a > b }
+        }
+        return false
+    }
+}
 
 struct BrandIcon: View {
     let size: CGFloat
@@ -358,6 +423,7 @@ struct ProfileEditor: View {
 
 struct ContentView: View {
     @StateObject private var store = VPNStore()
+    @StateObject private var updater = UpdateChecker()
     @State private var editing: VPNProfile?
     @State private var oldName: String?
     @State private var deleting: ProfileStatus?
@@ -366,6 +432,9 @@ struct ContentView: View {
     @State private var showHistory = false
     @State private var showRouteTest = false
     @State private var showFlows = false
+    @State private var showImporter = false
+    @State private var showUpdates = false
+    @State private var importError = ""
     @State private var pendingOTP: Set<String> = []
     @State private var submittedOTP: Set<String> = []
     @State private var otpCodes: [String: String] = [:]
@@ -375,7 +444,18 @@ struct ContentView: View {
             HStack {
                 BrandIcon(size: 38)
                 VStack(alignment: .leading) { Text("VPNToris").font(.title2.bold()); Text("Private routes, isolated tunnels").font(.caption).foregroundStyle(.secondary) }
-                Spacer(); Button("Routes") { diagnostics = .routes }.buttonStyle(.bordered); Button { showFlows = true } label: { Image(systemName: "point.3.filled.connected.trianglepath.dotted") }.buttonStyle(.bordered); Button { showHistory = true } label: { Image(systemName: "clock.arrow.circlepath") }.buttonStyle(.bordered); Button { showRouteTest = true } label: { Image(systemName: "scope") }.buttonStyle(.bordered); Button { oldName = nil; editing = VPNProfile() } label: { Image(systemName: "plus") }.buttonStyle(.bordered)
+                Spacer()
+                Menu {
+                    Button("Active Routes", systemImage: "point.3.connected.trianglepath.dotted") { diagnostics = .routes }
+                    Button("Active Connections", systemImage: "point.3.filled.connected.trianglepath.dotted") { showFlows = true }
+                    Button("Route Tester", systemImage: "scope") { showRouteTest = true }
+                    Button("Connection History", systemImage: "clock.arrow.circlepath") { showHistory = true }
+                    Divider()
+                    Button("Import VPN Profile…", systemImage: "square.and.arrow.down") { showImporter = true }
+                    Button("Export Diagnostics…", systemImage: "wrench.and.screwdriver") { Task { await exportDiagnostics() } }
+                    Button("Check for Updates…", systemImage: "arrow.triangle.2.circlepath") { showUpdates = true; Task { await updater.check() } }
+                } label: { Image(systemName: "ellipsis.circle") }.menuStyle(.borderlessButton).frame(width: 34)
+                Button { oldName = nil; editing = VPNProfile() } label: { Image(systemName: "plus") }.buttonStyle(.bordered)
             }.padding(18)
             Divider()
             if store.docker.state != "ready" {
@@ -464,6 +544,7 @@ struct ContentView: View {
             await store.refresh()
             await store.connectLaunchProfiles()
             await store.refreshDocker(retry: true)
+            await updater.check(silent: true)
             while store.docker.state == "checking" || store.docker.state == "building" {
                 try? await Task.sleep(for: .seconds(2))
                 await store.refreshDocker()
@@ -485,6 +566,11 @@ struct ContentView: View {
         .sheet(isPresented: $showHistory) { HistoryView() }
         .sheet(isPresented: $showRouteTest) { RouteTestView() }
         .sheet(isPresented: $showFlows) { ActiveFlowsView() }
+        .sheet(isPresented: $showUpdates) { UpdateView(updater: updater) }
+        .fileImporter(isPresented: $showImporter, allowedContentTypes: [.data, .plainText], allowsMultipleSelection: false) { result in
+            do { if let url = try result.get().first { oldName = nil; editing = try importedProfile(from: url) } } catch { importError = error.localizedDescription }
+        }
+        .alert("Import failed", isPresented: Binding(get: { !importError.isEmpty }, set: { if !$0 { importError = "" } })) { Button("OK") { importError = "" } } message: { Text(importError) }
         .alert("Delete \(deleting?.name ?? "profile")?", isPresented: Binding(get: { deleting != nil }, set: { if !$0 { deleting = nil } })) {
             Button("Cancel", role: .cancel) { deleting = nil }
             Button("Delete", role: .destructive) { if let p = deleting { store.deleteCredentials(named: p.name); Task { await store.action("delete", name: p.name) } }; deleting = nil }
@@ -518,6 +604,52 @@ struct ContentView: View {
         UNUserNotificationCenter.current().add(UNNotificationRequest(identifier: "vpntoris-otp-\(profile)", content: content, trigger: nil))
     }
 
+    private func importedProfile(from url: URL) throws -> VPNProfile {
+        let scoped = url.startAccessingSecurityScopedResource()
+        defer { if scoped { url.stopAccessingSecurityScopedResource() } }
+        let text = try String(contentsOf: url, encoding: .utf8)
+        var profile = VPNProfile()
+        profile.name = url.deletingPathExtension().lastPathComponent
+        if url.pathExtension.lowercased() == "ovpn" || text.contains("client\n") || text.contains("client\r\n") {
+            profile.type = "openvpn"
+            profile.config = text
+            for line in text.components(separatedBy: .newlines) {
+                let fields = line.split(whereSeparator: { $0 == " " || $0 == "\t" })
+                if fields.first == "remote", fields.count >= 2 { profile.host = String(fields[1]); if fields.count >= 3 { profile.port = String(fields[2]) }; break }
+            }
+            return profile
+        }
+        profile.type = text.localizedCaseInsensitiveContains("ipsec") ? "ipsec" : "openfortivpn"
+        profile.host = xmlValue(["server", "gateway", "remote_gateway"], in: text)
+        profile.user = xmlValue(["username", "user"], in: text)
+        let importedName = xmlValue(["name", "connection_name"], in: text)
+        if !importedName.isEmpty { profile.name = importedName }
+        let importedPort = xmlValue(["port"], in: text)
+        if !importedPort.isEmpty { profile.port = importedPort }
+        if profile.type == "ipsec" { profile.ipsec = IPSecSettings() }
+        guard !profile.host.isEmpty else { throw NSError(domain: "VPNToris", code: 1, userInfo: [NSLocalizedDescriptionKey: "No OpenVPN remote or FortiClient gateway was found in the selected file."]) }
+        return profile
+    }
+
+    private func xmlValue(_ names: [String], in text: String) -> String {
+        for name in names {
+            let escaped = NSRegularExpression.escapedPattern(for: name)
+            if let expression = try? NSRegularExpression(pattern: "<\(escaped)[^>]*>\\s*([^<]+)\\s*</\(escaped)>", options: [.caseInsensitive]), let match = expression.firstMatch(in: text, range: NSRange(text.startIndex..., in: text)), let range = Range(match.range(at: 1), in: text) { return String(text[range]).trimmingCharacters(in: .whitespacesAndNewlines) }
+        }
+        return ""
+    }
+
+    private func exportDiagnostics() async {
+        do {
+            let (data, response) = try await URLSession.shared.data(from: URL(string: "http://127.0.0.1:17984/api/diagnostics")!)
+            guard (response as? HTTPURLResponse)?.statusCode == 200 else { throw NSError(domain: "VPNToris", code: 5, userInfo: [NSLocalizedDescriptionKey: "The diagnostics service returned an error."]) }
+            let panel = NSSavePanel()
+            panel.allowedContentTypes = [.zip]
+            panel.nameFieldStringValue = "VPNToris-Diagnostics-\(ISO8601DateFormatter().string(from: Date()).replacingOccurrences(of: ":", with: "-" )).zip"
+            if panel.runModal() == .OK, let url = panel.url { try data.write(to: url, options: .atomic) }
+        } catch { importError = "Diagnostics: \(error.localizedDescription)" }
+    }
+
     private func submitOTP(_ profile: ProfileStatus) {
         let code = (otpCodes[profile.name] ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
         guard !code.isEmpty else { return }; submittedOTP.insert(profile.name)
@@ -526,6 +658,32 @@ struct ContentView: View {
     private func cancelOTP(_ profile: ProfileStatus) {
         pendingOTP.remove(profile.name); submittedOTP.remove(profile.name); otpCodes[profile.name] = ""
         Task { await store.action("disconnect", name: profile.name) }
+    }
+}
+
+struct UpdateView: View {
+    @Environment(\.dismiss) private var dismiss
+    @ObservedObject var updater: UpdateChecker
+    var body: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            HStack { BrandIcon(size: 48); VStack(alignment: .leading) { Text("Software Update").font(.title2.bold()); Text("Installed: \(updater.currentVersion)").foregroundStyle(.secondary) }; Spacer(); Button("Done") { dismiss() } }
+            Divider()
+            HStack(spacing: 10) {
+                if updater.checking || updater.downloading { ProgressView().controlSize(.small) }
+                Image(systemName: updater.updateAvailable ? "arrow.down.circle.fill" : "checkmark.shield.fill").foregroundStyle(updater.updateAvailable ? .blue : .green)
+                Text(updater.state)
+            }
+            if let release = updater.release {
+                HStack { Text(release.name ?? release.tagName).font(.headline); Spacer(); Link("Release Notes", destination: release.htmlUrl) }
+            }
+            Text("Downloads are accepted only when the DMG matches the SHA-256 checksum published with the GitHub release. VPNToris saves the verified installer to Downloads and never replaces the running app automatically.").font(.caption).foregroundStyle(.secondary)
+            HStack {
+                Button("Check Again") { Task { await updater.check() } }.disabled(updater.checking || updater.downloading)
+                Spacer()
+                if let file = updater.downloadedFile { Button("Show in Finder") { NSWorkspace.shared.activateFileViewerSelecting([file]) }.buttonStyle(.borderedProminent) }
+                else if updater.updateAvailable { Button("Download and Verify") { Task { await updater.download() } }.buttonStyle(.borderedProminent).disabled(updater.downloading) }
+            }
+        }.padding(22).frame(width: 540)
     }
 }
 

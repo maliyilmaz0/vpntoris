@@ -75,3 +75,17 @@ func TestRenderSwanctlConfig(t *testing.T) {
 		}
 	}
 }
+
+func TestSanitizeDiagnosticText(t *testing.T) {
+	secrets := []string{"super-" + "secret", "another-" + "secret", "visible-" + "token", "123" + "456"}
+	input := "password=" + secrets[0] + " psk:" + secrets[1] + " --token " + secrets[2] + " otp " + secrets[3] + " safe=value"
+	output := sanitizeDiagnosticText(input)
+	for _, secret := range secrets {
+		if strings.Contains(output, secret) {
+			t.Fatalf("diagnostic output contains %q: %s", secret, output)
+		}
+	}
+	if !strings.Contains(output, "safe=value") {
+		t.Fatalf("unrelated diagnostic content was removed: %s", output)
+	}
+}

@@ -485,6 +485,7 @@ func startPACServer() error {
 	mux.HandleFunc("/api/traffic", handleTrafficAPI)
 	mux.HandleFunc("/api/history", handleHistoryAPI)
 	mux.HandleFunc("/api/route-check", handleRouteCheckAPI)
+	mux.HandleFunc("/api/recover", handleRecoverAPI)
 	mux.HandleFunc("/proxy.pac", func(response http.ResponseWriter, _ *http.Request) {
 		proxyState.RLock()
 		type pacRoute struct {
@@ -518,6 +519,16 @@ func startPACServer() error {
 	go func() { _ = http.Serve(listener, mux) }()
 	go monitorActiveProxy()
 	return nil
+}
+
+func handleRecoverAPI(response http.ResponseWriter, request *http.Request) {
+	if request.Method != http.MethodPost {
+		http.Error(response, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	go bootstrapDockerImage()
+	go restoreHealthyRoutes()
+	response.WriteHeader(http.StatusNoContent)
 }
 
 func handleTrafficAPI(response http.ResponseWriter, _ *http.Request) {

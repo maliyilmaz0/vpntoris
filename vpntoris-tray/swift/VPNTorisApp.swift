@@ -129,12 +129,32 @@ enum ProfileKeychain {
     @Published var traffic: [String: TrafficStatus] = [:]
     @Published var trafficHistory: [String: [Double]] = [:]
     private let api = URL(string: "http://127.0.0.1:17984")!
+    private var previousConnections: [String: Bool] = [:]
+    private var connectionStateInitialized = false
 
     func refresh() async {
         do {
             let (data, _) = try await URLSession.shared.data(from: api.appending(path: "api/profiles"))
-            profiles = try JSONDecoder().decode([ProfileStatus].self, from: data)
+            let updated = try JSONDecoder().decode([ProfileStatus].self, from: data)
+            if connectionStateInitialized {
+                for profile in updated {
+                    if let previous = previousConnections[profile.name], previous != profile.connected {
+                        notifyConnection(profile.name, connected: profile.connected)
+                    }
+                }
+            }
+            profiles = updated
+            previousConnections = Dictionary(uniqueKeysWithValues: updated.map { ($0.name, $0.connected) })
+            connectionStateInitialized = true
         } catch { self.error = error.localizedDescription }
+    }
+
+    private func notifyConnection(_ profile: String, connected: Bool) {
+        let content = UNMutableNotificationContent()
+        content.title = connected ? "VPN connected" : "VPN disconnected"
+        content.body = profile
+        content.sound = connected ? nil : .default
+        UNUserNotificationCenter.current().add(UNNotificationRequest(identifier: "vpntoris-state-\(profile)-\(connected)", content: content, trigger: nil))
     }
 
     func refreshDocker(retry: Bool = false) async {
@@ -592,6 +612,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var statusItem: NSStatusItem!
     private let popover = NSPopover()
     private var contentController: NSViewController!
+    private var trafficTimer: Timer?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory)
@@ -606,7 +627,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         contentController = NSHostingController(rootView: ContentView())
         popover.contentViewController = contentController
 
-        statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
+        statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         if let button = statusItem.button {
             if let url = Bundle.main.url(forResource: "VPNTorisLogo", withExtension: "png"), let image = NSImage(contentsOf: url) {
                 image.size = NSSize(width: 18, height: 18)
@@ -620,6 +641,29 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             button.target = self
             button.action = #selector(togglePopover(_:))
         }
+        trafficTimer = Timer.scheduledTimer(timeInterval: 2, target: self, selector: #selector(updateMenuTraffic), userInfo: nil, repeats: true)
+        NSWorkspace.shared.notificationCenter.addObserver(self, selector: #selector(systemDidWake), name: NSWorkspace.didWakeNotification, object: nil)
+    }
+
+    @objc private func updateMenuTraffic() {
+        URLSession.shared.dataTask(with: URL(string: "http://127.0.0.1:17984/api/traffic")!) { [weak self] data, _, _ in
+            guard let data, let items = try? JSONDecoder().decode([TrafficStatus].self, from: data) else { return }
+            let down = items.reduce(0) { $0 + $1.receiveBps }
+            let up = items.reduce(0) { $0 + $1.sendBps }
+            DispatchQueue.main.async { self?.statusItem.button?.title = items.isEmpty ? "" : " ↓\(self?.compactRate(down) ?? "0") ↑\(self?.compactRate(up) ?? "0")" }
+        }.resume()
+    }
+
+    private func compactRate(_ value: Double) -> String {
+        if value >= 1_000_000 { return String(format: "%.1fM", value / 1_000_000) }
+        if value >= 1_000 { return String(format: "%.0fK", value / 1_000) }
+        return String(format: "%.0fB", value)
+    }
+
+    @objc private func systemDidWake() {
+        var request = URLRequest(url: URL(string: "http://127.0.0.1:17984/api/recover")!)
+        request.httpMethod = "POST"
+        URLSession.shared.dataTask(with: request).resume()
     }
 
     @objc private func togglePopover(_ sender: Any?) {
@@ -634,7 +678,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
-    func applicationWillTerminate(_ notification: Notification) { daemon?.terminate() }
+    func applicationWillTerminate(_ notification: Notification) { trafficTimer?.invalidate(); NSWorkspace.shared.notificationCenter.removeObserver(self); daemon?.terminate() }
 }
 
 @main struct VPNTorisApp: App {

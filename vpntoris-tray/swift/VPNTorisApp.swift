@@ -1,0 +1,374 @@
+import SwiftUI
+
+struct VPNProfile: Codable, Identifiable, Hashable {
+    var id: String { name }
+    var name = ""
+    var description = ""
+    var type = "openfortivpn"
+    var host = ""
+    var port = "443"
+    var user = ""
+    var password = ""
+    var twoFactor: Bool?
+    var routes = ""
+    var config = ""
+    var ipsec: IPSecSettings?
+}
+
+struct IPSecSettings: Codable, Hashable {
+    var ikeVersion = 2
+    var ikeMode = "main"
+    var authMode = "eap"
+    var preSharedKey = ""
+    var localID = ""
+    var remoteID = ""
+    var modeConfig = true
+    var natTraversal = true
+    var forceEncap = false
+    var mobike = false
+    var fragmentation = "yes"
+    var dpdAction = "restart"
+    var dpdDelay = 30
+    var dpdTimeout = 150
+    var ikeLifetime = 28800
+    var ikeEncryption = "aes256,aes128,aes256gcm16,aes128gcm16,chacha20poly1305"
+    var ikeIntegrity = "sha256,sha384,sha512"
+    var ikePRF = "prfsha256,prfsha384,prfsha512"
+    var dhGroups = "14,19,20,21,31"
+    var childLifetime = 3600
+    var childLifetimeKB = 0
+    var espEncryption = "aes256,aes128,aes256gcm16,aes128gcm16,chacha20poly1305"
+    var espIntegrity = "sha256,sha384,sha512"
+    var pfs = false
+    var pfsGroups = "14,19,20,21,31"
+    var replayWindow = 32
+    var localSelectors = ""
+    var remoteSelectors = ""
+    var phase2Proposals: [IPSecProposal]?
+}
+
+struct IPSecProposal: Codable, Hashable { var encryption = "aes256"; var authentication = "sha256" }
+
+struct ProfileStatus: Codable, Identifiable {
+    var id: String { name }
+    let name: String
+    let description: String
+    let type: String
+    let host: String
+    let routes: String
+    let connected: Bool
+    let twoFactor: Bool
+}
+
+struct ActiveRoute: Codable, Identifiable { var id: String { profile + cidr }; let profile: String; let cidr: String; let port: String }
+
+@MainActor final class VPNStore: ObservableObject {
+    @Published var profiles: [ProfileStatus] = []
+    @Published var error = ""
+    @Published var busy: Set<String> = []
+    private let api = URL(string: "http://127.0.0.1:17984")!
+
+    func refresh() async {
+        do {
+            let (data, _) = try await URLSession.shared.data(from: api.appending(path: "api/profiles"))
+            profiles = try JSONDecoder().decode([ProfileStatus].self, from: data)
+        } catch { self.error = error.localizedDescription }
+    }
+
+    func action(_ action: String, name: String, otp: String = "") async {
+        busy.insert(name)
+        defer { busy.remove(name) }
+        do {
+            var parts = URLComponents(url: api.appending(path: "api/action"), resolvingAgainstBaseURL: false)!
+            parts.queryItems = [.init(name: "action", value: action), .init(name: "name", value: name)]
+            var request = URLRequest(url: parts.url!)
+            request.httpMethod = "POST"
+            if !otp.isEmpty { request.setValue(otp, forHTTPHeaderField: "X-VPNToris-OTP") }
+            let (data, response) = try await URLSession.shared.data(for: request)
+            guard (response as? HTTPURLResponse)?.statusCode == 204 else {
+                throw NSError(domain: "VPNToris", code: 1, userInfo: [NSLocalizedDescriptionKey: String(data: data, encoding: .utf8) ?? "Operation failed"])
+            }
+            error = ""
+            try? await Task.sleep(for: .seconds(1))
+            await refresh()
+        } catch { self.error = error.localizedDescription }
+    }
+
+    func logs(for name: String) async throws -> String {
+        var parts = URLComponents(url: api.appending(path: "api/logs"), resolvingAgainstBaseURL: false)!; parts.queryItems = [.init(name: "name", value: name)]
+        let (data, response) = try await URLSession.shared.data(from: parts.url!); guard (response as? HTTPURLResponse)?.statusCode == 200 else { throw NSError(domain: "VPNToris", code: 1, userInfo: [NSLocalizedDescriptionKey: String(data: data, encoding: .utf8) ?? "Log unavailable"]) }; return String(data: data, encoding: .utf8) ?? ""
+    }
+    func routes() async throws -> [ActiveRoute] { let (data, _) = try await URLSession.shared.data(from: api.appending(path: "api/routes")); return try JSONDecoder().decode([ActiveRoute].self, from: data) }
+
+    func storedProfile(named name: String) -> VPNProfile? { loadConfigs().first { $0.name == name } }
+
+    func save(_ profile: VPNProfile, replacing oldName: String?) throws {
+        var configs = loadConfigs()
+        if let oldName { configs.removeAll { $0.name == oldName } }
+        configs.removeAll { $0.name == profile.name }
+        configs.append(profile)
+        let url = try configURL()
+        try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try JSONEncoder.pretty.encode(configs).write(to: url, options: .atomic)
+    }
+
+    private func loadConfigs() -> [VPNProfile] {
+        guard let url = try? configURL(), let data = try? Data(contentsOf: url) else { return [] }
+        return (try? JSONDecoder().decode([VPNProfile].self, from: data)) ?? []
+    }
+
+    private func configURL() throws -> URL {
+        try FileManager.default.url(for: .applicationSupportDirectory, in: .userDomainMask, appropriateFor: nil, create: true)
+            .appending(path: "VPNToris/configs.json")
+    }
+}
+
+extension JSONEncoder { static var pretty: JSONEncoder { let e = JSONEncoder(); e.outputFormatting = [.prettyPrinted, .sortedKeys]; return e } }
+
+struct ProfileEditor: View {
+    @Environment(\.dismiss) private var dismiss
+    @State var profile: VPNProfile
+    @State private var ipsec: IPSecSettings
+    let title: String
+    let onSave: (VPNProfile) -> Void
+    init(profile: VPNProfile, title: String, onSave: @escaping (VPNProfile) -> Void) {
+        _profile = State(initialValue: profile)
+        var settings = profile.ipsec ?? IPSecSettings()
+        settings.ikeEncryption = settings.ikeEncryption.components(separatedBy: ",").first ?? "aes256"
+        settings.ikeIntegrity = settings.ikeIntegrity.components(separatedBy: ",").first ?? "sha256"
+        settings.ikePRF = settings.ikePRF.components(separatedBy: ",").first ?? "prfsha256"
+        settings.dhGroups = settings.dhGroups.components(separatedBy: ",").first ?? "14"
+        if settings.ikeVersion == 1 && settings.authMode == "eap" { settings.authMode = "xauth" }
+        if settings.phase2Proposals == nil { settings.phase2Proposals = [IPSecProposal()] }
+        _ipsec = State(initialValue: settings)
+        self.title = title
+        self.onSave = onSave
+    }
+    var body: some View {
+        ScrollView { VStack(alignment: .leading, spacing: 14) {
+            Text(title).font(.title2.bold())
+            TextField("Profile name", text: $profile.name)
+            Picker("VPN type", selection: $profile.type) { Text("FortiVPN SSL").tag("openfortivpn"); Text("FortiClient IPsec").tag("ipsec"); Text("OpenConnect").tag("openconnect"); Text("OpenVPN").tag("openvpn") }
+            HStack { TextField("Host", text: $profile.host); TextField("Port", text: $profile.port).frame(width: 80) }
+            TextField("Username", text: $profile.user)
+            SecureField("Password", text: $profile.password)
+            Toggle("Ask for 2FA / OTP when connecting", isOn: Binding(get: { profile.twoFactor ?? false }, set: { profile.twoFactor = $0 }))
+            TextField("VPN routes (10.68.0.0/16, …)", text: $profile.routes)
+            TextField("Description", text: $profile.description)
+            if profile.type == "openvpn" { TextEditor(text: $profile.config).font(.system(.caption, design: .monospaced)).frame(height: 100).overlay(RoundedRectangle(cornerRadius: 6).stroke(.quaternary)) }
+            if profile.type == "ipsec" { ipsecSettings }
+            HStack { Spacer(); Button("Cancel") { dismiss() }; Button("Save") { if profile.type == "ipsec" { profile.ipsec = ipsec }; onSave(profile); dismiss() }.buttonStyle(.borderedProminent).disabled(profile.name.isEmpty || profile.host.isEmpty) }
+        }.padding(22) }.frame(width: 520, height: profile.type == "ipsec" ? 680 : 480)
+    }
+
+    @ViewBuilder private var ipsecSettings: some View {
+        Divider(); Text("IPsec Advanced Settings").font(.headline)
+        GroupBox("VPN Settings") { VStack(alignment: .leading, spacing: 10) {
+            Picker("IKE", selection: $ipsec.ikeVersion) { Text("Version 1").tag(1); Text("Version 2").tag(2) }.pickerStyle(.segmented).onChange(of: ipsec.ikeVersion) { version in if version == 1 && ipsec.authMode == "eap" { ipsec.authMode = "xauth" } }
+            if ipsec.ikeVersion == 1 { Picker("Exchange mode", selection: $ipsec.ikeMode) { Text("Main").tag("main"); Text("Aggressive").tag("aggressive") } }
+            Picker("Extended authentication", selection: $ipsec.authMode) { Text("None").tag("none"); Text("XAuth").tag("xauth"); if ipsec.ikeVersion == 2 { Text("EAP").tag("eap") } }
+            SecureField("Pre-shared key", text: $ipsec.preSharedKey)
+            Toggle("Mode Config / virtual IP", isOn: $ipsec.modeConfig)
+            Toggle("NAT Traversal", isOn: $ipsec.natTraversal); Toggle("Force UDP encapsulation", isOn: $ipsec.forceEncap)
+            if ipsec.ikeVersion == 2 { Toggle("MOBIKE", isOn: $ipsec.mobike) }
+        }.padding(6) }
+        DisclosureGroup("Phase 1 (IKE SA)") { VStack(alignment: .leading, spacing: 9) {
+            Picker("Encryption", selection: $ipsec.ikeEncryption) { ForEach(encryptionAlgorithms, id: \.self) { Text($0.uppercased()).tag($0) } }
+            Picker("Authentication", selection: $ipsec.ikeIntegrity) { ForEach(authenticationAlgorithms, id: \.self) { Text($0.uppercased()).tag($0) } }
+            if ipsec.ikeVersion == 2 { Picker("PRF", selection: $ipsec.ikePRF) { ForEach(prfAlgorithms, id: \.self) { Text($0.uppercased()).tag($0) } } }
+            Picker("DH Group", selection: $ipsec.dhGroups) { ForEach(dhGroups, id: \.self) { Text("Group \($0)").tag($0) } }
+            HStack { TextField("Key life (seconds)", value: $ipsec.ikeLifetime, format: .number); TextField("Local ID", text: $ipsec.localID); TextField("Remote ID", text: $ipsec.remoteID) }
+            HStack { Picker("DPD", selection: $ipsec.dpdAction) { Text("Restart").tag("restart"); Text("Clear").tag("clear"); Text("Hold").tag("trap"); Text("None").tag("none") }; TextField("Delay", value: $ipsec.dpdDelay, format: .number); TextField("Timeout", value: $ipsec.dpdTimeout, format: .number) }
+            Picker("Fragmentation", selection: $ipsec.fragmentation) { Text("Yes").tag("yes"); Text("Accept").tag("accept"); Text("No").tag("no") }
+        }.padding(.top, 8) }
+        DisclosureGroup("Phase 2 (CHILD SA / ESP)") { VStack(alignment: .leading, spacing: 9) {
+            ForEach(Array((ipsec.phase2Proposals ?? []).indices), id: \.self) { index in
+                HStack {
+                    Picker("Encryption", selection: Binding(get: { ipsec.phase2Proposals?[index].encryption ?? "aes256" }, set: { ipsec.phase2Proposals?[index].encryption = $0 })) { ForEach(encryptionAlgorithms, id: \.self) { Text($0.uppercased()).tag($0) } }
+                    Picker("Authentication", selection: Binding(get: { ipsec.phase2Proposals?[index].authentication ?? "sha256" }, set: { ipsec.phase2Proposals?[index].authentication = $0 })) { ForEach(authenticationAlgorithms, id: \.self) { Text($0.uppercased()).tag($0) } }
+                    Button { ipsec.phase2Proposals?.remove(at: index) } label: { Image(systemName: "minus.circle") }.buttonStyle(.borderless).disabled((ipsec.phase2Proposals?.count ?? 0) <= 1)
+                }
+            }
+            Button("Add Proposal", systemImage: "plus") { ipsec.phase2Proposals = (ipsec.phase2Proposals ?? []) + [IPSecProposal()] }
+            HStack { Toggle("PFS", isOn: $ipsec.pfs); TextField("PFS DH groups", text: $ipsec.pfsGroups).disabled(!ipsec.pfs) }
+            HStack { TextField("Key life seconds", value: $ipsec.childLifetime, format: .number); TextField("Key life KB", value: $ipsec.childLifetimeKB, format: .number); TextField("Replay window", value: $ipsec.replayWindow, format: .number) }
+            TextField("Local traffic selectors", text: $ipsec.localSelectors)
+            TextField("Remote traffic selectors (defaults to VPN Routes)", text: $ipsec.remoteSelectors)
+        }.padding(.top, 8) }
+    }
+
+    private func algorithmHint(_ text: String) -> some View { Text(text).font(.caption2).foregroundStyle(.secondary).textSelection(.enabled) }
+    private var encryptionAlgorithms: [String] { ["aes128", "aes192", "aes256", "aes128gcm16", "aes256gcm16", "chacha20poly1305", "3des", "des"] }
+    private var authenticationAlgorithms: [String] { ["md5", "sha1", "sha256", "sha384", "sha512"] }
+    private var prfAlgorithms: [String] { ["prfmd5", "prfsha1", "prfsha256", "prfsha384", "prfsha512"] }
+    private var dhGroups: [String] { ["1", "2", "5", "14", "15", "16", "17", "18", "19", "20", "21", "31", "32"] }
+}
+
+struct ContentView: View {
+    @StateObject private var store = VPNStore()
+    @State private var editing: VPNProfile?
+    @State private var oldName: String?
+    @State private var deleting: ProfileStatus?
+    @State private var showTouchIDHelp = false
+    @State private var diagnostics: DiagnosticsTarget?
+    @State private var pendingOTP: Set<String> = []
+    @State private var submittedOTP: Set<String> = []
+    @State private var otpCodes: [String: String] = [:]
+
+    var body: some View {
+        VStack(spacing: 0) {
+            HStack {
+                Image(systemName: "shield.lefthalf.filled").font(.title).foregroundStyle(.orange)
+                VStack(alignment: .leading) { Text("VPNToris").font(.title2.bold()); Text("Private routes, isolated tunnels").font(.caption).foregroundStyle(.secondary) }
+                Spacer(); Button("Routes") { diagnostics = .routes }.buttonStyle(.bordered); Button { oldName = nil; editing = VPNProfile() } label: { Image(systemName: "plus") }.buttonStyle(.bordered)
+            }.padding(18)
+            Divider()
+            if !store.error.isEmpty { Text(store.error).font(.caption).foregroundStyle(.red).padding(10) }
+            ScrollView {
+                LazyVStack(spacing: 10) {
+                    ForEach(store.profiles) { profile in
+                        VStack(alignment: .leading, spacing: 10) {
+                            HStack {
+                                VStack(alignment: .leading, spacing: 3) { Text(profile.name).font(.headline); Text("\(profile.type) · \(profile.host)").font(.caption).foregroundStyle(.secondary) }
+                                Spacer()
+                                if store.busy.contains(profile.name) && !profile.connected {
+                                    ProgressView().controlSize(.small)
+                                    Text("Connecting…").font(.caption).foregroundStyle(.secondary)
+                                    Button("Cancel", role: .destructive) {
+                                        pendingOTP.remove(profile.name); submittedOTP.remove(profile.name); otpCodes[profile.name] = ""
+                                        Task { await store.action("disconnect", name: profile.name) }
+                                    }.buttonStyle(.bordered).tint(.red)
+                                } else { Button(profile.connected ? "Disconnect" : "Connect") {
+                                    if !profile.connected && profile.twoFactor {
+                                        pendingOTP.insert(profile.name)
+                                        submittedOTP.remove(profile.name)
+                                        otpCodes[profile.name] = ""
+                                        Task {
+                                            await store.action("connect", name: profile.name)
+                                            pendingOTP.remove(profile.name)
+                                            submittedOTP.remove(profile.name)
+                                        }
+                                    } else { Task { await store.action(profile.connected ? "disconnect" : "connect", name: profile.name) } }
+                                }
+                                    .buttonStyle(.borderedProminent).tint(profile.connected ? .red : .green)
+                                }
+                            }
+                            Label(profile.routes.isEmpty ? "No routes configured" : profile.routes, systemImage: "point.3.connected.trianglepath.dotted").font(.caption).foregroundStyle(.cyan)
+                            if pendingOTP.contains(profile.name) && !profile.connected {
+                                VStack(alignment: .leading, spacing: 8) {
+                                    HStack { ProgressView().controlSize(.small); Text(submittedOTP.contains(profile.name) ? "OTP submitted, connecting…" : "Connecting — waiting for OTP").font(.caption).foregroundStyle(.secondary) }
+                                    HStack {
+                                        SecureField("2FA / OTP code", text: Binding(get: { otpCodes[profile.name] ?? "" }, set: { otpCodes[profile.name] = $0 })).textFieldStyle(.roundedBorder).onSubmit { submitOTP(profile) }
+                                        Button("Submit OTP") { submitOTP(profile) }.buttonStyle(.borderedProminent).disabled((otpCodes[profile.name] ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                                        Button("Cancel", role: .destructive) { cancelOTP(profile) }
+                                    }
+                                }.padding(10).background(.orange.opacity(0.10), in: RoundedRectangle(cornerRadius: 9))
+                            }
+                            HStack {
+                                if profile.connected { Button("Use Routes") { Task { await store.action("route", name: profile.name) } } }
+                                Button("Logs") { diagnostics = .logs(profile.name) }; Button("Edit") { oldName = profile.name; editing = store.storedProfile(named: profile.name) }
+                                Spacer(); Button("Delete", role: .destructive) { deleting = profile }
+                            }.buttonStyle(.borderless)
+                        }.padding(14).background(.thinMaterial, in: RoundedRectangle(cornerRadius: 14))
+                    }
+                }.padding(14)
+            }
+            Divider(); HStack { Circle().fill(Color.green).frame(width: 7); Text("Docker service").font(.caption).foregroundStyle(.secondary); Spacer(); Button("Touch ID") { showTouchIDHelp = true }.buttonStyle(.borderless); Button("Quit") { NSApplication.shared.terminate(nil) }.buttonStyle(.borderless) }.padding(12)
+        }.frame(width: 410, height: 560).task { await store.refresh() }
+        .sheet(item: $editing) { value in ProfileEditor(profile: value, title: oldName == nil ? "Add VPN Profile" : "Edit VPN Profile") { profile in try? store.save(profile, replacing: oldName); Task { await store.refresh() } } }
+        .sheet(isPresented: $showTouchIDHelp) { TouchIDHelpView() }
+        .sheet(item: $diagnostics) { target in DiagnosticsView(store: store, target: target) }
+        .alert("Delete \(deleting?.name ?? "profile")?", isPresented: Binding(get: { deleting != nil }, set: { if !$0 { deleting = nil } })) {
+            Button("Cancel", role: .cancel) { deleting = nil }
+            Button("Delete", role: .destructive) { if let p = deleting { Task { await store.action("delete", name: p.name) } }; deleting = nil }
+        }
+    }
+
+    private func submitOTP(_ profile: ProfileStatus) {
+        let code = (otpCodes[profile.name] ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !code.isEmpty else { return }; submittedOTP.insert(profile.name)
+        Task { await store.action("otp", name: profile.name, otp: code) }
+    }
+    private func cancelOTP(_ profile: ProfileStatus) {
+        pendingOTP.remove(profile.name); submittedOTP.remove(profile.name); otpCodes[profile.name] = ""
+        Task { await store.action("disconnect", name: profile.name) }
+    }
+}
+
+enum DiagnosticsTarget: Identifiable { case routes, logs(String); var id: String { switch self { case .routes: return "routes"; case .logs(let name): return "logs-" + name } } }
+
+struct DiagnosticsView: View {
+    @Environment(\.dismiss) private var dismiss; @ObservedObject var store: VPNStore; let target: DiagnosticsTarget
+    @State private var logs = "Loading…"; @State private var routes: [ActiveRoute] = []
+    var body: some View { VStack(alignment: .leading, spacing: 12) { HStack { Text(title).font(.title2.bold()); Spacer(); Button("Refresh") { Task { await load() } }; Button("Done") { dismiss() } }; if case .routes = target { List(routes) { route in HStack { VStack(alignment: .leading) { Text(route.cidr).font(.system(.body, design: .monospaced)); Text(route.profile).foregroundStyle(.secondary) }; Spacer(); Text("SOCKS :\(route.port)").font(.caption) } } } else { ScrollView { Text(logs).font(.system(.caption, design: .monospaced)).textSelection(.enabled).frame(maxWidth: .infinity, alignment: .leading) } }; }.padding(18).frame(width: 640, height: 480).task { await load() } }
+    private var title: String { switch target { case .routes: return "Active Routes"; case .logs(let name): return name + " Logs" } }
+    private func load() async { do { switch target { case .routes: routes = try await store.routes(); case .logs(let name): logs = try await store.logs(for: name) } } catch { logs = error.localizedDescription } }
+}
+
+struct TouchIDHelpView: View {
+    @Environment(\.dismiss) private var dismiss
+    private let command = "sudo sh -c 'touch /etc/pam.d/sudo_local; grep -q \"^[[:space:]]*auth[[:space:]].*pam_tid\\.so\" /etc/pam.d/sudo_local || printf \"auth       sufficient     pam_tid.so\\n\" >> /etc/pam.d/sudo_local' && sudo -k && sudo true"
+    private var enabled: Bool {
+        guard let text = try? String(contentsOfFile: "/etc/pam.d/sudo_local", encoding: .utf8) else { return false }
+        return text.split(separator: "\n").contains { !$0.trimmingCharacters(in: .whitespaces).hasPrefix("#") && $0.contains("pam_tid.so") }
+    }
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            HStack { Image(systemName: "touchid").font(.largeTitle).foregroundStyle(.blue); VStack(alignment: .leading) { Text("Touch ID for sudo").font(.title2.bold()); Text(enabled ? "Enabled on this Mac" : "Not enabled").foregroundStyle(enabled ? .green : .orange) } }
+            Text("This enables Touch ID for sudo commands in Terminal. It preserves existing PAM settings and uses sudo_local, which survives macOS updates.").font(.callout).foregroundStyle(.secondary)
+            Text("Ready command").font(.headline)
+            Text(command).font(.system(.caption, design: .monospaced)).textSelection(.enabled).padding(10).background(.quaternary, in: RoundedRectangle(cornerRadius: 8))
+            Text("The macOS administrator dialog used by AppleScript is separate from sudo and may still request your password. VPNToris will use a one-time privileged helper to remove repeated prompts.").font(.caption).foregroundStyle(.secondary)
+            HStack { Button("Open Terminal") { NSWorkspace.shared.open(URL(fileURLWithPath: "/System/Applications/Utilities/Terminal.app")) }; Spacer(); Button("Copy Command") { NSPasteboard.general.clearContents(); NSPasteboard.general.setString(command, forType: .string) }.buttonStyle(.borderedProminent); Button("Done") { dismiss() } }
+        }.padding(22).frame(width: 520)
+    }
+}
+
+final class AppDelegate: NSObject, NSApplicationDelegate {
+    var daemon: Process?
+    private var statusItem: NSStatusItem!
+    private let popover = NSPopover()
+    private var contentController: NSViewController!
+
+    func applicationDidFinishLaunching(_ notification: Notification) {
+        NSApp.setActivationPolicy(.accessory)
+        let process = Process(); process.executableURL = Bundle.main.bundleURL.appending(path: "Contents/MacOS/vpntorisd"); process.arguments = ["--daemon", String(ProcessInfo.processInfo.processIdentifier)]; try? process.run(); daemon = process
+
+
+        popover.contentSize = NSSize(width: 410, height: 560)
+        popover.behavior = .applicationDefined
+        popover.animates = true
+        contentController = NSHostingController(rootView: ContentView())
+        popover.contentViewController = contentController
+
+        statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
+        if let button = statusItem.button {
+            button.image = NSImage(systemSymbolName: "shield.lefthalf.filled", accessibilityDescription: "VPNToris")
+            button.image?.isTemplate = true
+            button.toolTip = "VPNToris"
+            button.target = self
+            button.action = #selector(togglePopover(_:))
+        }
+    }
+
+    @objc private func togglePopover(_ sender: Any?) {
+        guard let button = statusItem.button else { return }
+        if popover.isShown {
+            popover.performClose(sender)
+        } else {
+            popover.contentViewController = contentController
+            popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
+            popover.contentViewController?.view.window?.makeKey()
+            NSApp.activate(ignoringOtherApps: true)
+        }
+    }
+
+    func applicationWillTerminate(_ notification: Notification) { daemon?.terminate() }
+}
+
+@main struct VPNTorisApp: App {
+    @NSApplicationDelegateAdaptor(AppDelegate.self) var delegate
+    var body: some Scene {
+        Settings { EmptyView() }
+    }
+}

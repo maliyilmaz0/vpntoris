@@ -67,6 +67,17 @@ struct DockerStatus: Codable {
     let message: String
 }
 
+struct BrandIcon: View {
+    let size: CGFloat
+    var body: some View {
+        if let url = Bundle.main.url(forResource: "VPNTorisLogo", withExtension: "png"), let image = NSImage(contentsOf: url) {
+            Image(nsImage: image).resizable().scaledToFit().frame(width: size, height: size)
+        } else {
+            Image(systemName: "shield.lefthalf.filled").resizable().scaledToFit().frame(width: size, height: size).foregroundStyle(.orange)
+        }
+    }
+}
+
 @MainActor final class VPNStore: ObservableObject {
     @Published var profiles: [ProfileStatus] = []
     @Published var error = ""
@@ -235,7 +246,7 @@ struct ContentView: View {
     var body: some View {
         VStack(spacing: 0) {
             HStack {
-                Image(systemName: "shield.lefthalf.filled").font(.title).foregroundStyle(.orange)
+                BrandIcon(size: 38)
                 VStack(alignment: .leading) { Text("VPNToris").font(.title2.bold()); Text("Private routes, isolated tunnels").font(.caption).foregroundStyle(.secondary) }
                 Spacer(); Button("Routes") { diagnostics = .routes }.buttonStyle(.bordered); Button { oldName = nil; editing = VPNProfile() } label: { Image(systemName: "plus") }.buttonStyle(.bordered)
             }.padding(18)
@@ -397,8 +408,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
         if let button = statusItem.button {
-            button.image = NSImage(systemSymbolName: "shield.lefthalf.filled", accessibilityDescription: "VPNToris")
-            button.image?.isTemplate = true
+            if let url = Bundle.main.url(forResource: "VPNTorisLogo", withExtension: "png"), let image = NSImage(contentsOf: url) {
+                image.size = NSSize(width: 18, height: 18)
+                image.isTemplate = false
+                button.image = image
+            } else {
+                button.image = NSImage(systemSymbolName: "shield.lefthalf.filled", accessibilityDescription: "VPNToris")
+                button.image?.isTemplate = true
+            }
             button.toolTip = "VPNToris"
             button.target = self
             button.action = #selector(togglePopover(_:))

@@ -24,6 +24,7 @@ done
 rm -rf "$BUILD_DIR"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources/Licenses" "$DIST_DIR"
 cp "$ROOT_DIR/vpntoris-tray/Info.plist" "$APP/Contents/Info.plist"
+cp "$ROOT_DIR/assets/vpntoris-logo.png" "$APP/Contents/Resources/VPNTorisLogo.png"
 mkdir -p "$APP/Contents/Resources/DockerContext"
 cp -R "$ROOT_DIR/docker/." "$APP/Contents/Resources/DockerContext/"
 

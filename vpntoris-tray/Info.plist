@@ -10,6 +10,8 @@
     <string>VPNToris</string>
     <key>CFBundleIconFile</key>
     <string>AppIcon</string>
+    <key>CFBundleIconName</key>
+    <string>AppIcon</string>
     <key>CFBundleIdentifier</key>
     <string>com.vpntoris.app</string>
     <key>CFBundleInfoDictionaryVersion</key>

@@ -62,10 +62,27 @@ struct ProfileStatus: Codable, Identifiable {
 
 struct ActiveRoute: Codable, Identifiable { var id: String { profile + cidr }; let profile: String; let cidr: String; let port: String }
 
+struct DockerStatus: Codable {
+    let state: String
+    let message: String
+}
+
+struct BrandIcon: View {
+    let size: CGFloat
+    var body: some View {
+        if let url = Bundle.main.url(forResource: "VPNTorisLogo", withExtension: "png"), let image = NSImage(contentsOf: url) {
+            Image(nsImage: image).resizable().scaledToFit().frame(width: size, height: size)
+        } else {
+            Image(systemName: "shield.lefthalf.filled").resizable().scaledToFit().frame(width: size, height: size).foregroundStyle(.orange)
+        }
+    }
+}
+
 @MainActor final class VPNStore: ObservableObject {
     @Published var profiles: [ProfileStatus] = []
     @Published var error = ""
     @Published var busy: Set<String> = []
+    @Published var docker = DockerStatus(state: "checking", message: "Checking Docker…")
     private let api = URL(string: "http://127.0.0.1:17984")!
 
     func refresh() async {
@@ -73,6 +90,17 @@ struct ActiveRoute: Codable, Identifiable { var id: String { profile + cidr }; l
             let (data, _) = try await URLSession.shared.data(from: api.appending(path: "api/profiles"))
             profiles = try JSONDecoder().decode([ProfileStatus].self, from: data)
         } catch { self.error = error.localizedDescription }
+    }
+
+    func refreshDocker(retry: Bool = false) async {
+        do {
+            var request = URLRequest(url: api.appending(path: "api/docker"))
+            if retry { request.httpMethod = "POST" }
+            let (data, _) = try await URLSession.shared.data(for: request)
+            docker = try JSONDecoder().decode(DockerStatus.self, from: data)
+        } catch {
+            docker = DockerStatus(state: "error", message: error.localizedDescription)
+        }
     }
 
     func action(_ action: String, name: String, otp: String = "") async {
@@ -218,11 +246,31 @@ struct ContentView: View {
     var body: some View {
         VStack(spacing: 0) {
             HStack {
-                Image(systemName: "shield.lefthalf.filled").font(.title).foregroundStyle(.orange)
+                BrandIcon(size: 38)
                 VStack(alignment: .leading) { Text("VPNToris").font(.title2.bold()); Text("Private routes, isolated tunnels").font(.caption).foregroundStyle(.secondary) }
                 Spacer(); Button("Routes") { diagnostics = .routes }.buttonStyle(.bordered); Button { oldName = nil; editing = VPNProfile() } label: { Image(systemName: "plus") }.buttonStyle(.bordered)
             }.padding(18)
             Divider()
+            if store.docker.state != "ready" {
+                HStack(spacing: 10) {
+                    if store.docker.state == "checking" || store.docker.state == "building" { ProgressView().controlSize(.small) }
+                    else { Image(systemName: store.docker.state == "missing" ? "shippingbox" : "exclamationmark.triangle.fill").foregroundStyle(.orange) }
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(dockerTitle).font(.callout.bold())
+                        Text(store.docker.message).font(.caption).foregroundStyle(.secondary).lineLimit(3)
+                    }
+                    Spacer()
+                    if store.docker.state == "stopped" {
+                        Button("Open Docker") { NSWorkspace.shared.open(URL(fileURLWithPath: "/Applications/Docker.app")) }.buttonStyle(.borderedProminent)
+                    }
+                    if store.docker.state == "missing" {
+                        Button("Download") { NSWorkspace.shared.open(URL(string: "https://www.docker.com/products/docker-desktop/")!) }.buttonStyle(.borderedProminent)
+                    }
+                    if store.docker.state == "stopped" || store.docker.state == "error" {
+                        Button("Retry") { Task { await store.refreshDocker(retry: true) } }.buttonStyle(.bordered)
+                    }
+                }.padding(10).background(.orange.opacity(0.12))
+            }
             if !store.error.isEmpty { Text(store.error).font(.caption).foregroundStyle(.red).padding(10) }
             ScrollView {
                 LazyVStack(spacing: 10) {
@@ -250,7 +298,7 @@ struct ContentView: View {
                                         }
                                     } else { Task { await store.action(profile.connected ? "disconnect" : "connect", name: profile.name) } }
                                 }
-                                    .buttonStyle(.borderedProminent).tint(profile.connected ? .red : .green)
+                                    .buttonStyle(.borderedProminent).tint(profile.connected ? .red : .green).disabled(!profile.connected && store.docker.state != "ready")
                                 }
                             }
                             Label(profile.routes.isEmpty ? "No routes configured" : profile.routes, systemImage: "point.3.connected.trianglepath.dotted").font(.caption).foregroundStyle(.cyan)
@@ -273,14 +321,31 @@ struct ContentView: View {
                     }
                 }.padding(14)
             }
-            Divider(); HStack { Circle().fill(Color.green).frame(width: 7); Text("Docker service").font(.caption).foregroundStyle(.secondary); Spacer(); Button("Touch ID") { showTouchIDHelp = true }.buttonStyle(.borderless); Button("Quit") { NSApplication.shared.terminate(nil) }.buttonStyle(.borderless) }.padding(12)
-        }.frame(width: 410, height: 560).task { await store.refresh() }
+            Divider(); HStack { Circle().fill(store.docker.state == "ready" ? Color.green : Color.orange).frame(width: 7); Text(store.docker.state == "ready" ? "Docker ready" : "Docker unavailable").font(.caption).foregroundStyle(.secondary); Spacer(); Button("Touch ID") { showTouchIDHelp = true }.buttonStyle(.borderless); Button("Quit") { NSApplication.shared.terminate(nil) }.buttonStyle(.borderless) }.padding(12)
+        }.frame(width: 410, height: 560).task {
+            await store.refresh()
+            await store.refreshDocker(retry: true)
+            while store.docker.state == "checking" || store.docker.state == "building" {
+                try? await Task.sleep(for: .seconds(2))
+                await store.refreshDocker()
+            }
+        }
         .sheet(item: $editing) { value in ProfileEditor(profile: value, title: oldName == nil ? "Add VPN Profile" : "Edit VPN Profile") { profile in try? store.save(profile, replacing: oldName); Task { await store.refresh() } } }
         .sheet(isPresented: $showTouchIDHelp) { TouchIDHelpView() }
         .sheet(item: $diagnostics) { target in DiagnosticsView(store: store, target: target) }
         .alert("Delete \(deleting?.name ?? "profile")?", isPresented: Binding(get: { deleting != nil }, set: { if !$0 { deleting = nil } })) {
             Button("Cancel", role: .cancel) { deleting = nil }
             Button("Delete", role: .destructive) { if let p = deleting { Task { await store.action("delete", name: p.name) } }; deleting = nil }
+        }
+    }
+
+    private var dockerTitle: String {
+        switch store.docker.state {
+        case "missing": return "Docker Desktop is required"
+        case "stopped": return "Docker Desktop is not running"
+        case "building": return "Preparing VPN engine"
+        case "error": return "Docker setup failed"
+        default: return "Checking Docker"
         }
     }
 
@@ -343,8 +408,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
         if let button = statusItem.button {
-            button.image = NSImage(systemSymbolName: "shield.lefthalf.filled", accessibilityDescription: "VPNToris")
-            button.image?.isTemplate = true
+            if let url = Bundle.main.url(forResource: "VPNTorisLogo", withExtension: "png"), let image = NSImage(contentsOf: url) {
+                image.size = NSSize(width: 18, height: 18)
+                image.isTemplate = false
+                button.image = image
+            } else {
+                button.image = NSImage(systemSymbolName: "shield.lefthalf.filled", accessibilityDescription: "VPNToris")
+                button.image?.isTemplate = true
+            }
             button.toolTip = "VPNToris"
             button.target = self
             button.action = #selector(togglePopover(_:))

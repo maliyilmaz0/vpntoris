@@ -538,7 +538,7 @@ struct ContentView: View {
                     }
                 }.padding(14)
             }
-            Divider(); HStack { Circle().fill(store.docker.state == "ready" ? Color.green : Color.orange).frame(width: 7); Text(store.docker.state == "ready" ? "Docker ready" : "Docker unavailable").font(.caption).foregroundStyle(.secondary); Spacer(); Button("Touch ID") { showTouchIDHelp = true }.buttonStyle(.borderless); Button("Quit") { NSApplication.shared.terminate(nil) }.buttonStyle(.borderless) }.padding(12)
+            Divider(); HStack { Circle().fill(store.docker.state == "ready" ? Color.green : Color.orange).frame(width: 7); Text(store.docker.state == "ready" ? "Docker ready" : "Docker unavailable").font(.caption).foregroundStyle(.secondary); Text("v\(updater.currentVersion)").font(.caption.monospacedDigit()).foregroundStyle(.tertiary).help("VPNToris version \(updater.currentVersion)"); Spacer(); Button("Touch ID") { showTouchIDHelp = true }.buttonStyle(.borderless); Button("Quit") { NSApplication.shared.terminate(nil) }.buttonStyle(.borderless) }.padding(12)
         }.frame(width: 410, height: 560).task {
             store.migrateLegacyCredentials()
             await store.refresh()

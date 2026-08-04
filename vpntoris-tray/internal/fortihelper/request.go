@@ -33,6 +33,7 @@ type Request struct {
 	Username      string   `json:"username,omitempty"`
 	Password      string   `json:"password,omitempty"`
 	OTP           string   `json:"otp,omitempty"`
+	TwoFactor     bool     `json:"twoFactor,omitempty"`
 	TrustedCert   string   `json:"trustedCert,omitempty"`
 	Routes        []string `json:"routes,omitempty"`
 }

@@ -3,6 +3,8 @@
 package main
 
 import (
+	"bufio"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"net"
@@ -30,15 +32,21 @@ var pppReadyPattern = regexp.MustCompile(`(?m)Interface (ppp[0-9]+) is UP\.`)
 var utunReadyPattern = regexp.MustCompile(`(?m)Opened utun device (utun[0-9]+)`)
 
 type session struct {
-	request       fortihelper.Request
-	command       *exec.Cmd
-	input         *os.File
-	log           *os.File
-	logPath       string
-	interfaceName string
-	state         string
-	errorText     string
-	configPath    string
+	request        fortihelper.Request
+	command        *exec.Cmd
+	input          *os.File
+	log            *os.File
+	logPath        string
+	interfaceName  string
+	state          string
+	errorText      string
+	configPath     string
+	managementPath string
+	management     net.Conn
+	username       string
+	password       string
+	challenge      string
+	challengeState string
 }
 
 type server struct {
@@ -201,9 +209,10 @@ func (service *server) start(request fortihelper.Request) fortihelper.Response {
 			_ = os.Remove(configPath)
 			return fortihelper.Response{State: "failed", Error: writeErr.Error()}
 		}
-		arguments = []string{"--config", configPath, "--dev", "tun", "--route-nopull", "--script-security", "1", "--auth-nocache", "--verb", "3"}
+		managementPath := strings.TrimSuffix(configPath, ".ovpn") + ".sock"
+		arguments = []string{"--config", configPath, "--dev", "tun", "--route-nopull", "--script-security", "1", "--auth-nocache", "--verb", "3", "--management", managementPath, "unix", "--management-query-passwords", "--management-hold", "--auth-retry", "interact"}
 		if request.Username != "" {
-			arguments = append(arguments, "--auth-user-pass", "/dev/stdin")
+			arguments = append(arguments, "--auth-user-pass")
 		}
 	}
 	command := exec.Command(executable, arguments...)
@@ -222,16 +231,16 @@ func (service *server) start(request fortihelper.Request) fortihelper.Response {
 		return fortihelper.Response{State: "failed", Error: err.Error()}
 	}
 	readInput.Close()
-	current := &session{request: request, command: command, input: writeInput, log: logFile, logPath: logPath, configPath: configPath, state: "connecting"}
+	current := &session{request: request, command: command, input: writeInput, log: logFile, logPath: logPath, configPath: configPath, state: "connecting", username: request.Username, password: request.Password}
+	if protocol == fortihelper.ProtocolOpenVPN {
+		current.managementPath = strings.TrimSuffix(configPath, ".ovpn") + ".sock"
+	}
 	current.request.Password = ""
 	current.request.OTP = ""
 	current.request.Configuration = ""
 	service.sessions[request.Profile] = current
-	credential := request.Password + "\n"
-	if protocol == fortihelper.ProtocolOpenVPN {
-		credential = request.Username + "\n" + request.Password + "\n"
-	}
-	if request.Password != "" {
+	if protocol != fortihelper.ProtocolOpenVPN && request.Password != "" {
+		credential := request.Password + "\n"
 		if _, err := current.input.Write([]byte(credential)); err != nil {
 			service.stopLocked(current)
 			return fortihelper.Response{State: "failed", Error: "could not supply VPN credential"}
@@ -240,6 +249,7 @@ func (service *server) start(request fortihelper.Request) fortihelper.Response {
 	if protocol == fortihelper.ProtocolOpenVPN {
 		current.input.Close()
 		current.input = nil
+		go service.manageOpenVPN(current)
 	}
 	if request.OTP != "" {
 		if _, err := current.input.Write([]byte(request.OTP + "\n")); err != nil {
@@ -256,7 +266,11 @@ func (service *server) start(request fortihelper.Request) fortihelper.Response {
 func (service *server) monitor(current *session) {
 	wait := make(chan error, 1)
 	go func() { wait <- current.command.Wait() }()
-	deadline := time.NewTimer(45 * time.Second)
+	timeout := 45 * time.Second
+	if current.request.TwoFactor {
+		timeout = 190 * time.Second
+	}
+	deadline := time.NewTimer(timeout)
 	ticker := time.NewTicker(250 * time.Millisecond)
 	defer deadline.Stop()
 	defer ticker.Stop()
@@ -285,6 +299,7 @@ func (service *server) monitor(current *session) {
 			service.mu.Lock()
 			current.interfaceName = interfaceName
 			current.state = "connected"
+			current.password = ""
 			service.mu.Unlock()
 			go func() {
 				err := <-wait
@@ -299,7 +314,24 @@ func (service *server) sendOTP(request fortihelper.Request) fortihelper.Response
 	service.mu.Lock()
 	defer service.mu.Unlock()
 	current := service.sessions[request.Profile]
-	if current == nil || current.input == nil || current.state != "connecting" {
+	if current == nil || current.state != "connecting" && current.state != "waiting-otp" {
+		return fortihelper.Response{State: "failed", Error: "profile is not waiting for authentication"}
+	}
+	if current.request.Protocol == fortihelper.ProtocolOpenVPN {
+		if current.management == nil || current.challenge == "" {
+			return fortihelper.Response{State: "failed", Error: "OpenVPN is not waiting for a challenge response"}
+		}
+		username, password := openVPNChallengeCredentials(current.challenge, current.challengeState, current.username, current.password, request.OTP)
+		if err := writeManagementCredentials(current.management, username, password); err != nil {
+			return fortihelper.Response{State: "failed", Error: "could not supply OpenVPN challenge response"}
+		}
+		current.password = ""
+		current.challenge = ""
+		current.challengeState = ""
+		current.state = "connecting"
+		return fortihelper.Response{State: current.state}
+	}
+	if current.input == nil {
 		return fortihelper.Response{State: "failed", Error: "profile is not waiting for authentication"}
 	}
 	if _, err := current.input.Write([]byte(request.OTP + "\n")); err != nil {
@@ -327,6 +359,13 @@ func (service *server) stopLocked(current *session) {
 	if current.input != nil {
 		current.input.Close()
 		current.input = nil
+	}
+	if current.management != nil {
+		current.management.Close()
+		current.management = nil
+	}
+	if current.managementPath != "" {
+		_ = os.Remove(current.managementPath)
 	}
 	if current.command != nil && current.command.Process != nil {
 		_ = syscall.Kill(-current.command.Process.Pid, syscall.SIGTERM)
@@ -358,6 +397,14 @@ func (service *server) finish(current *session, waitError error) {
 	if current.log != nil {
 		current.log.Close()
 		current.log = nil
+	}
+	if current.management != nil {
+		current.management.Close()
+		current.management = nil
+	}
+	if current.managementPath != "" {
+		_ = os.Remove(current.managementPath)
+		current.managementPath = ""
 	}
 	if current.configPath != "" {
 		_ = os.Remove(current.configPath)
@@ -406,6 +453,94 @@ func interfaceFromLog(path string, protocol string) string {
 func logContains(path string, value string) bool {
 	data, err := os.ReadFile(path)
 	return err == nil && strings.Contains(string(data), value)
+}
+
+func (service *server) manageOpenVPN(current *session) {
+	deadline := time.Now().Add(10 * time.Second)
+	var connection net.Conn
+	var err error
+	for time.Now().Before(deadline) {
+		connection, err = net.DialTimeout("unix", current.managementPath, 250*time.Millisecond)
+		if err == nil {
+			break
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	if err != nil {
+		service.fail(current, "could not connect to OpenVPN management socket")
+		return
+	}
+	service.mu.Lock()
+	current.management = connection
+	service.mu.Unlock()
+	_, _ = connection.Write([]byte("state on\nhold release\n"))
+	scanner := bufio.NewScanner(connection)
+	for scanner.Scan() {
+		line := scanner.Text()
+		if strings.Contains(line, ">PASSWORD:Need 'Auth' username/password") {
+			service.mu.Lock()
+			if strings.Contains(line, "SC:") {
+				current.challenge = "static"
+				current.state = "waiting-otp"
+			} else if current.challenge == "dynamic" || current.challenge == "append" {
+				current.state = "waiting-otp"
+			} else {
+				err = writeManagementCredentials(connection, current.username, current.password)
+				if !current.request.TwoFactor {
+					current.password = ""
+				}
+			}
+			service.mu.Unlock()
+			if err != nil {
+				service.fail(current, "could not supply OpenVPN credentials")
+				return
+			}
+		}
+		if strings.Contains(line, ">PASSWORD:Verification Failed:") {
+			dynamic := false
+			if index := strings.Index(line, "CRV1:"); index >= 0 {
+				parts := strings.SplitN(line[index:], ":", 5)
+				if len(parts) == 5 {
+					decoded, decodeErr := base64.StdEncoding.DecodeString(parts[3])
+					if decodeErr == nil {
+						service.mu.Lock()
+						current.username = string(decoded)
+						current.challenge = "dynamic"
+						current.challengeState = parts[2]
+						service.mu.Unlock()
+						dynamic = true
+					}
+				}
+			}
+			if !dynamic && current.request.TwoFactor {
+				service.mu.Lock()
+				current.challenge = "append"
+				service.mu.Unlock()
+			}
+		}
+	}
+}
+
+func writeManagementCredentials(connection net.Conn, username string, password string) error {
+	_, err := fmt.Fprintf(connection, "username \"Auth\" \"%s\"\npassword \"Auth\" \"%s\"\n", managementEscape(username), managementEscape(password))
+	return err
+}
+
+func openVPNChallengeCredentials(challenge string, state string, username string, password string, otp string) (string, string) {
+	switch challenge {
+	case "static":
+		password = "SCRV1:" + base64.StdEncoding.EncodeToString([]byte(password)) + ":" + base64.StdEncoding.EncodeToString([]byte(otp))
+	case "dynamic":
+		password = "CRV1::" + state + "::" + otp
+	case "append":
+		password += otp
+	}
+	return username, password
+}
+
+func managementEscape(value string) string {
+	value = strings.ReplaceAll(value, `\`, `\\`)
+	return strings.ReplaceAll(value, `"`, `\"`)
 }
 
 func addRoutes(interfaceName string, routes []string) error {

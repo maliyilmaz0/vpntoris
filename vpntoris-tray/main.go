@@ -1165,6 +1165,9 @@ func handleProfilesAPI(response http.ResponseWriter, _ *http.Request) {
 		otpRequests.RLock()
 		needsOTP := otpRequests.names[config.Name]
 		otpRequests.RUnlock()
+		if nativeOpenVPNSupported(config) {
+			needsOTP = nativeOpenVPNNeedsOTP(config.Name)
+		}
 		gateways := gatewayCandidates(config)
 		profiles = append(profiles, profileView{
 			Name: config.Name, Description: config.Description, Type: config.Type,
@@ -1849,7 +1852,7 @@ func sendOTP(config VPNConfig, otp string) error {
 	if otp == "" || len(otp) > 32 {
 		return fmt.Errorf("invalid OTP code")
 	}
-	if nativeFortiSupported(config) {
+	if nativeFortiSupported(config) || nativeOpenVPNSupported(config) {
 		return nativeFortiOTP(config.Name, otp)
 	}
 	command := dockerCommand("exec", "-i", containerName(config.Name), "/bin/bash", "-c", "cat > /run/vpntoris/otp")

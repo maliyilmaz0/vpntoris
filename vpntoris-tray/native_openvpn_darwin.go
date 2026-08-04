@@ -15,10 +15,12 @@ func nativeOpenVPNSupported(config VPNConfig) bool {
 	return config.Type == "openvpn" && nativeHelperReady()
 }
 
+func nativeOpenVPNNeedsOTP(name string) bool {
+	status, err := nativeFortiStatus(name)
+	return err == nil && status.State == "waiting-otp"
+}
+
 func nativeOpenVPNConnect(config VPNConfig) error {
-	if config.TwoFactor {
-		return fmt.Errorf("native OpenVPN interactive OTP is not supported yet")
-	}
 	configuration := config.Config
 	if strings.TrimSpace(config.Host) != "" {
 		configuration = overrideOpenVPNRemote(configuration, config.Host, config.Port)
@@ -35,7 +37,7 @@ func nativeOpenVPNConnect(config VPNConfig) error {
 	for _, route := range routes {
 		values = append(values, fmt.Sprintf("%s/%d", route.network, route.prefix))
 	}
-	request := fortihelper.Request{Action: fortihelper.ActionStart, Profile: nativeProfileID(config.Name), Protocol: fortihelper.ProtocolOpenVPN, Configuration: configuration, Username: config.User, Password: config.Password, Routes: values}
+	request := fortihelper.Request{Action: fortihelper.ActionStart, Profile: nativeProfileID(config.Name), Protocol: fortihelper.ProtocolOpenVPN, Configuration: configuration, Username: config.User, Password: config.Password, TwoFactor: config.TwoFactor, Routes: values}
 	response, err := nativeFortiRequest(request)
 	request.Password = ""
 	request.Configuration = ""
@@ -52,6 +54,9 @@ func nativeOpenVPNConnect(config VPNConfig) error {
 			return statusError
 		}
 		if status.State == "connected" {
+			otpRequests.Lock()
+			delete(otpRequests.names, config.Name)
+			otpRequests.Unlock()
 			return nil
 		}
 		if status.State == "failed" {

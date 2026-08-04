@@ -27,6 +27,7 @@ import (
 const socketPath = "/var/run/vpntoris-native/helper.sock"
 const logDirectory = "/var/log/vpntoris"
 const runtimeDirectory = "/var/run/vpntoris-native"
+const ipsecNegotiationTimeout = 300 * time.Second
 
 var pppReadyPattern = regexp.MustCompile(`(?m)Interface (ppp[0-9]+) is UP\.`)
 var utunReadyPattern = regexp.MustCompile(`(?m)Opened utun device (utun[0-9]+)`)
@@ -317,7 +318,7 @@ func (service *server) monitor(current *session) {
 	go func() { wait <- current.command.Wait() }()
 	timeout := 45 * time.Second
 	if current.request.TwoFactor {
-		timeout = 190 * time.Second
+		timeout = ipsecNegotiationTimeout
 	}
 	deadline := time.NewTimer(timeout)
 	ticker := time.NewTicker(250 * time.Millisecond)
@@ -493,7 +494,7 @@ func (service *server) startIPSecLocked(request fortihelper.Request) fortihelper
 	}
 	current := &session{request: request, logPath: logPath, configPath: configPath, otpPath: otpPath, state: state, startedAt: time.Now()}
 	service.sessions[request.Profile] = current
-	initiate := service.ipsecCommandFor("--initiate", "--child", "net-"+request.Profile, "--timeout", "190", "--loglevel", "2")
+	initiate := service.ipsecCommandFor("--initiate", "--child", "net-"+request.Profile, "--timeout", strconv.FormatInt(int64(ipsecNegotiationTimeout/time.Second), 10), "--loglevel", "2")
 	initiate.Stdout = logFile
 	initiate.Stderr = logFile
 	go func() {
@@ -547,9 +548,13 @@ func (service *server) ensureIPSecDaemonLocked() error {
 		}
 	}
 	service.ipsecSocket = filepath.Join(runtimeDirectory, "charon.vici")
+	service.cleanupOrphanedIPSecDaemonLocked()
+	_ = os.Remove(service.ipsecSocket)
+	_ = os.Remove(filepath.Join(runtimeDirectory, "charon.pid"))
 	service.ipsecConfig = filepath.Join(runtimeDirectory, "strongswan.conf")
 	service.ipsecSwanctl = filepath.Join(enginePath, "bin", "swanctl")
 	configuration := fmt.Sprintf("libstrongswan {\n  plugin_dir = %s\n}\ncharon {\n  install_routes = yes\n  load_modular = yes\n  plugins {\n    random { load = yes }\n    nonce { load = yes }\n    x509 { load = yes }\n    revocation { load = yes }\n    constraints { load = yes }\n    pubkey { load = yes }\n    pkcs1 { load = yes }\n    pkcs8 { load = yes }\n    pem { load = yes }\n    openssl { load = yes }\n    kernel-pfkey { load = yes }\n    kernel-pfroute { load = yes }\n    socket-default { load = yes }\n    vici {\n      load = yes\n      socket = unix://%s\n    }\n    eap-identity { load = yes }\n    eap-mschapv2 { load = yes }\n    eap-md5 { load = yes }\n    eap-gtc { load = yes }\n    eap-peap { load = yes }\n    xauth-generic { load = yes }\n    unity { load = yes }\n    counters { load = yes }\n    curve25519 { load = yes }\n    kdf { load = yes }\n  }\n}\n", filepath.Join(enginePath, "plugins"), service.ipsecSocket)
+	configuration = strings.Replace(configuration, "charon {\n", fmt.Sprintf("charon {\n  pid_file = %s\n", filepath.Join(runtimeDirectory, "charon.pid")), 1)
 	if err := os.WriteFile(service.ipsecConfig, []byte(configuration), 0600); err != nil {
 		return err
 	}
@@ -572,7 +577,7 @@ func (service *server) ensureIPSecDaemonLocked() error {
 	service.ipsecLog = logFile
 	deadline := time.Now().Add(8 * time.Second)
 	for time.Now().Before(deadline) {
-		if info, statErr := os.Stat(service.ipsecSocket); statErr == nil && info.Mode()&os.ModeSocket != 0 {
+		if info, statErr := os.Stat(service.ipsecSocket); statErr == nil && info.Mode()&os.ModeSocket != 0 && service.ipsecVICIReady() {
 			go service.waitForIPSecDaemon(command, logFile)
 			return nil
 		}
@@ -582,6 +587,15 @@ func (service *server) ensureIPSecDaemonLocked() error {
 	service.ipsecCommand = nil
 	logFile.Close()
 	return fmt.Errorf("native IPsec daemon did not become ready")
+}
+
+func (service *server) ipsecVICIReady() bool {
+	connection, err := net.DialTimeout("unix", service.ipsecSocket, 500*time.Millisecond)
+	if err != nil {
+		return false
+	}
+	_ = connection.Close()
+	return true
 }
 
 func (service *server) waitForIPSecDaemon(command *exec.Cmd, logFile *os.File) {
@@ -608,6 +622,30 @@ func (service *server) waitForIPSecDaemon(command *exec.Cmd, logFile *os.File) {
 
 func (service *server) ipsecEnvironment() []string {
 	return []string{"PATH=/usr/bin:/bin:/usr/sbin:/sbin", "LANG=C", "LC_ALL=C", "STRONGSWAN_CONF=" + service.ipsecConfig}
+}
+
+func (service *server) cleanupOrphanedIPSecDaemonLocked() {
+	pattern := filepath.Join(service.engineRoot, "strongswan", "bin", "charon")
+	output, err := exec.Command("/usr/bin/pgrep", "-f", pattern).Output()
+	if err == nil {
+		for _, line := range strings.Fields(string(output)) {
+			pid, parseErr := strconv.Atoi(line)
+			if parseErr == nil && pid > 1 && pid != os.Getpid() {
+				if process, findErr := os.FindProcess(pid); findErr == nil {
+					_ = process.Kill()
+				}
+			}
+		}
+	}
+	pidPath := filepath.Join(runtimeDirectory, "charon.pid")
+	if data, readErr := os.ReadFile(pidPath); readErr == nil {
+		if pid, parseErr := strconv.Atoi(strings.TrimSpace(string(data))); parseErr == nil {
+			_ = syscall.Kill(pid, 0)
+			if err := syscall.Kill(pid, 0); err != nil {
+				_ = os.Remove(pidPath)
+			}
+		}
+	}
 }
 
 func (service *server) ipsecCommandFor(arguments ...string) *exec.Cmd {

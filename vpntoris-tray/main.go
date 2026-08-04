@@ -19,7 +19,7 @@ import (
 	"time"
 )
 
-const imageName = "vpntoris-client:next-2"
+const imageName = "vpntoris-client:next-3"
 
 var safeNamePattern = regexp.MustCompile(`[^a-z0-9_.-]+`)
 
@@ -478,19 +478,22 @@ func runRootRouter(key, port string, routes []proxyRoute, domains []string, dnsP
 	for _, route := range routes {
 		request.Routes = append(request.Routes, fmt.Sprintf("%s/%d", route.network, route.prefix))
 	}
-	if err := sendRouterRequest(request); err == nil {
+	firstError := sendRouterRequest(request)
+	if firstError == nil {
 		return nil
 	}
 	if err := installRouterHelper(); err != nil {
-		return err
+		return fmt.Errorf("privileged routing helper installation failed after %v: %w", firstError, err)
 	}
+	var lastError error
 	for attempts := 0; attempts < 30; attempts++ {
-		if err := sendRouterRequest(request); err == nil {
+		lastError = sendRouterRequest(request)
+		if lastError == nil {
 			return nil
 		}
 		time.Sleep(100 * time.Millisecond)
 	}
-	return fmt.Errorf("privileged routing helper did not start")
+	return fmt.Errorf("privileged routing helper did not start: %w", lastError)
 }
 
 func sendRouterRequest(request routerRequest) error {
@@ -527,7 +530,7 @@ func installRouterHelper() error {
 		if message == "" {
 			message = err.Error()
 		}
-		return fmt.Errorf("privileged helper installation failed: %s", message)
+		return fmt.Errorf("%s", message)
 	}
 	return nil
 }

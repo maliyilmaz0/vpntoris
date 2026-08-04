@@ -83,6 +83,8 @@ func install(uid int) error {
 	if err != nil {
 		return err
 	}
+	_ = exec.Command("/bin/launchctl", "bootout", "system/com.vpntoris.router").Run()
+	_ = os.Remove(socketPath)
 	if err := copyExecutable(exe, installedHelper); err != nil {
 		return err
 	}
@@ -96,10 +98,9 @@ func install(uid int) error {
 <key>ProgramArguments</key><array><string>%s</string><string>daemon</string><string>%d</string></array>
 <key>RunAtLoad</key><true/><key>KeepAlive</key><true/>
 </dict></plist>`, installedHelper, uid)
-	if err := os.WriteFile(launchDaemonPlist, []byte(plist), 0644); err != nil {
+	if err := writeAtomic(launchDaemonPlist, []byte(plist), 0644); err != nil {
 		return err
 	}
-	_ = exec.Command("/bin/launchctl", "bootout", "system/com.vpntoris.router").Run()
 	if output, err := exec.Command("/bin/launchctl", "bootstrap", "system", launchDaemonPlist).CombinedOutput(); err != nil {
 		return fmt.Errorf("install launch daemon: %s", strings.TrimSpace(string(output)))
 	}
@@ -111,7 +112,35 @@ func copyExecutable(source, destination string) error {
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(destination, data, 0755)
+	return writeAtomic(destination, data, 0755)
+}
+
+func writeAtomic(destination string, data []byte, mode os.FileMode) error {
+	if err := os.MkdirAll(filepath.Dir(destination), 0755); err != nil {
+		return err
+	}
+	temporary, err := os.CreateTemp(filepath.Dir(destination), ".vpntoris-install-")
+	if err != nil {
+		return err
+	}
+	temporaryPath := temporary.Name()
+	defer os.Remove(temporaryPath)
+	if _, err := temporary.Write(data); err != nil {
+		temporary.Close()
+		return err
+	}
+	if err := temporary.Chmod(mode); err != nil {
+		temporary.Close()
+		return err
+	}
+	if err := temporary.Sync(); err != nil {
+		temporary.Close()
+		return err
+	}
+	if err := temporary.Close(); err != nil {
+		return err
+	}
+	return os.Rename(temporaryPath, destination)
 }
 
 func serve(uid int) error {

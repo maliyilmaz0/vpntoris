@@ -27,7 +27,15 @@ fi
 echo "Starting VPN client for $VPN_TYPE..."
 
 if [ "$VPN_TYPE" = "openvpn" ]; then
-    openvpn --config "$VPN_CONFIG" > "/logs/${VPN_NAME}.log" 2>&1 &
+    OPENVPN_ARGS=(--config "$VPN_CONFIG")
+    if [ -n "$VPN_USER" ]; then
+        mkdir -p /run/vpntoris
+        printf '%s\n%s\n' "$VPN_USER" "$VPN_PASS" > /run/vpntoris/openvpn.auth
+        chmod 600 /run/vpntoris/openvpn.auth
+        OPENVPN_ARGS+=(--auth-user-pass /run/vpntoris/openvpn.auth)
+    fi
+    openvpn "${OPENVPN_ARGS[@]}" > >(tee "/logs/${VPN_NAME}.log") 2>&1 &
+    VPN_PID=$!
 elif [ "$VPN_TYPE" = "openconnect" ]; then
     echo "$VPN_PASS" | openconnect "$VPN_HOST:$VPN_PORT" -u "$VPN_USER" --passwd-on-stdin > "/logs/${VPN_NAME}.log" 2>&1 &
 elif [ "$VPN_TYPE" = "openfortivpn" ]; then
@@ -77,6 +85,10 @@ if [ "$VPN_TYPE" = "ipsec" ]; then
 fi
 for i in {1..30}; do
 	if [ -n "$VPN_IFACE" ]; then break; fi
+    if [ "$VPN_TYPE" = "openvpn" ] && ! kill -0 "$VPN_PID" 2>/dev/null; then
+        wait "$VPN_PID"
+        exit $?
+    fi
     IFACE=$(ip -o addr show | awk '{print $2}' | grep -oE 'ppp[0-9]+|tun[0-9]+' | head -n 1 || true)
     if [ -n "$IFACE" ]; then
         VPN_IFACE=$IFACE

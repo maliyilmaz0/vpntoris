@@ -451,10 +451,22 @@ enum ProfileKeychain {
 
 extension JSONEncoder { static var pretty: JSONEncoder { let e = JSONEncoder(); e.outputFormatting = [.prettyPrinted, .sortedKeys]; return e } }
 
+func openVPNRemote(in configuration: String) -> (host: String, port: String?)? {
+    for rawLine in configuration.components(separatedBy: .newlines) {
+        let line = rawLine.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !line.hasPrefix("#"), !line.hasPrefix(";"), !line.isEmpty else { continue }
+        let fields = line.split(whereSeparator: { $0 == " " || $0 == "\t" })
+        if fields.first?.lowercased() == "remote", fields.count >= 2 { return (String(fields[1]), fields.count >= 3 ? String(fields[2]) : nil) }
+    }
+    return nil
+}
+
 struct ProfileEditor: View {
     @Environment(\.dismiss) private var dismiss
     @State var profile: VPNProfile
     @State private var ipsec: IPSecSettings
+    @State private var configDropActive = false
+    @State private var configImportError = ""
     let title: String
     let onSave: (VPNProfile) -> Void
     init(profile: VPNProfile, title: String, onSave: @escaping (VPNProfile) -> Void) {
@@ -487,7 +499,14 @@ struct ProfileEditor: View {
             TextField("Split DNS domains (corp.example.com, …)", text: Binding(get: { profile.domains ?? "" }, set: { profile.domains = $0 }))
             TextField("VPN DNS servers (10.0.0.53, …)", text: Binding(get: { profile.dnsServers ?? "" }, set: { profile.dnsServers = $0 }))
             TextField("Description", text: $profile.description)
-            if profile.type == "openvpn" { TextEditor(text: $profile.config).font(.system(.caption, design: .monospaced)).frame(height: 100).overlay(RoundedRectangle(cornerRadius: 6).stroke(.quaternary)) }
+            if profile.type == "openvpn" {
+                VStack(alignment: .leading, spacing: 8) {
+                    HStack { Image(systemName: "arrow.down.doc.fill"); Text("Drop an .ovpn or OpenVPN .conf file here").font(.callout.bold()); Spacer(); Button("Choose File…") { chooseOpenVPNConfig() } }
+                    Text(profile.config.isEmpty ? "The remote host, port and complete configuration will be imported." : "OpenVPN configuration loaded · \(profile.config.utf8.count) bytes").font(.caption).foregroundStyle(.secondary)
+                }.padding(13).frame(maxWidth: .infinity).background(configDropActive ? Color.accentColor.opacity(0.18) : Color.secondary.opacity(0.08), in: RoundedRectangle(cornerRadius: 10)).overlay(RoundedRectangle(cornerRadius: 10).stroke(configDropActive ? Color.accentColor : Color.secondary.opacity(0.3), style: StrokeStyle(lineWidth: configDropActive ? 2 : 1, dash: [6]))).onDrop(of: [UTType.fileURL.identifier], isTargeted: $configDropActive) { providers in loadOpenVPNDrop(providers) }
+                TextEditor(text: $profile.config).font(.system(.caption, design: .monospaced)).frame(height: 100).overlay(RoundedRectangle(cornerRadius: 6).stroke(.quaternary))
+                if !configImportError.isEmpty { Text(configImportError).font(.caption).foregroundStyle(.red) }
+            }
             if profile.type == "ipsec" { ipsecSettings }
             HStack { Spacer(); Button("Cancel") { dismiss() }; Button("Save") { if profile.type == "ipsec" { profile.ipsec = ipsec }; onSave(profile); dismiss() }.buttonStyle(.borderedProminent).disabled(profile.name.isEmpty || profile.host.isEmpty) }
         }.padding(22) }.frame(width: 520, height: profile.type == "ipsec" ? 680 : 480)
@@ -534,6 +553,64 @@ struct ProfileEditor: View {
     private var authenticationAlgorithms: [String] { ["md5", "sha1", "sha256", "sha384", "sha512"] }
     private var prfAlgorithms: [String] { ["prfmd5", "prfsha1", "prfsha256", "prfsha384", "prfsha512"] }
     private var dhGroups: [String] { ["1", "2", "5", "14", "15", "16", "17", "18", "19", "20", "21", "31", "32"] }
+
+    private func chooseOpenVPNConfig() {
+        let panel = NSOpenPanel()
+        panel.allowedContentTypes = [.data, .plainText]
+        panel.allowsMultipleSelection = false
+        if panel.runModal() == .OK, let url = panel.url { importOpenVPNConfig(url) }
+    }
+
+    private func loadOpenVPNDrop(_ providers: [NSItemProvider]) -> Bool {
+        guard let provider = providers.first else { return false }
+        provider.loadItem(forTypeIdentifier: UTType.fileURL.identifier, options: nil) { item, _ in
+            let url = (item as? URL) ?? (item as? Data).flatMap { URL(dataRepresentation: $0, relativeTo: nil) }
+            if let url { DispatchQueue.main.async { importOpenVPNConfig(url) } }
+        }
+        return true
+    }
+
+    private func importOpenVPNConfig(_ url: URL) {
+        do {
+            let text = try String(contentsOf: url, encoding: .utf8)
+            guard let remote = openVPNRemote(in: text) else { throw NSError(domain: "VPNToris", code: 2, userInfo: [NSLocalizedDescriptionKey: "This file does not contain an OpenVPN remote directive."]) }
+            profile.type = "openvpn"
+            profile.config = text
+            profile.host = remote.host
+            if let port = remote.port { profile.port = port }
+            if profile.name.isEmpty { profile.name = url.deletingPathExtension().lastPathComponent }
+            configImportError = ""
+        } catch { configImportError = error.localizedDescription }
+    }
+}
+
+struct DiscoveredVPNProfile: Identifiable {
+    let id = UUID()
+    let profile: VPNProfile
+    let source: URL
+}
+
+struct DiscoveredProfilesView: View {
+    @Environment(\.dismiss) private var dismiss
+    let profiles: [DiscoveredVPNProfile]
+    let onImport: (VPNProfile) -> Void
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            HStack { VStack(alignment: .leading) { Text("Discovered VPN Profiles").font(.title2.bold()); Text("OpenVPN and FortiClient configuration files found on this Mac").foregroundStyle(.secondary) }; Spacer(); Button("Done") { dismiss() } }
+            if profiles.isEmpty {
+                VStack(spacing: 12) { Spacer(); Image(systemName: "magnifyingglass").font(.system(size: 42)).foregroundStyle(.secondary); Text("No Profiles Found").font(.title3.bold()); Text("No readable OpenVPN or FortiClient profiles were found in their standard macOS locations.").foregroundStyle(.secondary); Spacer() }.frame(maxWidth: .infinity)
+            } else {
+                List(profiles) { item in
+                    HStack {
+                        Image(systemName: item.profile.type == "openvpn" ? "point.3.connected.trianglepath.dotted" : "shield.lefthalf.filled").foregroundStyle(.cyan)
+                        VStack(alignment: .leading, spacing: 3) { Text(item.profile.name).font(.headline); Text("\(item.profile.host) · \(item.source.path)").font(.caption).foregroundStyle(.secondary).lineLimit(2) }
+                        Spacer()
+                        Button("Import") { onImport(item.profile); dismiss() }.buttonStyle(.borderedProminent)
+                    }.padding(.vertical, 5)
+                }
+            }
+        }.padding(22).frame(width: 720, height: 480)
+    }
 }
 
 struct ContentView: View {
@@ -548,6 +625,9 @@ struct ContentView: View {
     @State private var showRouteTest = false
     @State private var showFlows = false
     @State private var showImporter = false
+    @State private var showDiscovery = false
+    @State private var discoveredProfiles: [DiscoveredVPNProfile] = []
+    @State private var profileDropActive = false
     @State private var showUpdates = false
     @State private var showAnalytics = false
     @State private var showNotifications = false
@@ -576,6 +656,7 @@ struct ContentView: View {
                     Button("Help and CLI", systemImage: "questionmark.circle") { showHelp = true }
                     Divider()
                     Button("Import VPN Profile…", systemImage: "square.and.arrow.down") { showImporter = true }
+                    Button("Discover Installed VPN Profiles…", systemImage: "magnifyingglass") { discoveredProfiles = discoverInstalledProfiles(); showDiscovery = true }
                     Button("Backup and Restore…", systemImage: "lock.doc") { showBackup = true }
                     Button("Export Diagnostics…", systemImage: "wrench.and.screwdriver") { Task { await exportDiagnostics() } }
                     Button("Check for Updates…", systemImage: "arrow.triangle.2.circlepath") { showUpdates = true; Task { await updater.check() } }
@@ -669,6 +750,7 @@ struct ContentView: View {
             Divider(); HStack { Circle().fill(store.docker.state == "ready" ? Color.green : Color.orange).frame(width: 7); Text(store.docker.state == "ready" ? "Docker ready" : "Docker unavailable").font(.caption).foregroundStyle(.secondary); Text("v\(updater.currentVersion)").font(.caption.monospacedDigit()).foregroundStyle(.tertiary).help("VPNToris version \(updater.currentVersion)"); Spacer(); Button("Touch ID") { showTouchIDHelp = true }.buttonStyle(.borderless); Button("Quit") { NSApplication.shared.terminate(nil) }.buttonStyle(.borderless) }.padding(12)
         }.frame(width: 410, height: 560).task {
             store.migrateLegacyCredentials()
+            discoveredProfiles = discoverInstalledProfiles()
             await store.refresh()
             await store.connectLaunchProfiles()
             await store.refreshDocker(retry: true)
@@ -700,6 +782,7 @@ struct ContentView: View {
         .sheet(isPresented: $showBackup) { BackupView(store: store) }
         .sheet(isPresented: $showLanguage) { LanguageSettingsView() }
         .sheet(isPresented: $showHelp) { HelpView() }
+        .sheet(isPresented: $showDiscovery) { DiscoveredProfilesView(profiles: discoveredProfiles) { profile in oldName = nil; editing = profile } }
         .fileImporter(isPresented: $showImporter, allowedContentTypes: [.data, .plainText], allowsMultipleSelection: false) { result in
             do { if let url = try result.get().first { oldName = nil; editing = try importedProfile(from: url) } } catch { importError = error.localizedDescription }
         }
@@ -708,6 +791,10 @@ struct ContentView: View {
             Button("Cancel", role: .cancel) { deleting = nil }
             Button("Delete", role: .destructive) { if let p = deleting { store.deleteCredentials(named: p.name); Task { await store.action("delete", name: p.name) } }; deleting = nil }
         }
+        .overlay {
+            if profileDropActive { RoundedRectangle(cornerRadius: 22).fill(.ultraThinMaterial).overlay { VStack(spacing: 12) { Image(systemName: "arrow.down.doc.fill").font(.system(size: 42)).foregroundStyle(.cyan); Text("Drop VPN configuration to import").font(.headline); Text("OpenVPN .ovpn/.conf and FortiClient export files").font(.caption).foregroundStyle(.secondary) } }.padding(10).allowsHitTesting(false) }
+        }
+        .onDrop(of: [UTType.fileURL.identifier], isTargeted: $profileDropActive) { importDroppedProfiles($0) }
     }
 
     private var dockerTitle: String {
@@ -745,10 +832,7 @@ struct ContentView: View {
         if url.pathExtension.lowercased() == "ovpn" || text.contains("client\n") || text.contains("client\r\n") {
             profile.type = "openvpn"
             profile.config = text
-            for line in text.components(separatedBy: .newlines) {
-                let fields = line.split(whereSeparator: { $0 == " " || $0 == "\t" })
-                if fields.first == "remote", fields.count >= 2 { profile.host = String(fields[1]); if fields.count >= 3 { profile.port = String(fields[2]) }; break }
-            }
+            if let remote = openVPNRemote(in: text) { profile.host = remote.host; if let port = remote.port { profile.port = port } }
             return profile
         }
         profile.type = text.localizedCaseInsensitiveContains("ipsec") ? "ipsec" : "openfortivpn"
@@ -761,6 +845,62 @@ struct ContentView: View {
         if profile.type == "ipsec" { profile.ipsec = IPSecSettings() }
         guard !profile.host.isEmpty else { throw NSError(domain: "VPNToris", code: 1, userInfo: [NSLocalizedDescriptionKey: "No OpenVPN remote or FortiClient gateway was found in the selected file."]) }
         return profile
+    }
+
+    private func importDroppedProfiles(_ providers: [NSItemProvider]) -> Bool {
+        guard let provider = providers.first else { return false }
+        provider.loadItem(forTypeIdentifier: UTType.fileURL.identifier, options: nil) { item, _ in
+            let url = (item as? URL) ?? (item as? Data).flatMap { URL(dataRepresentation: $0, relativeTo: nil) }
+            guard let url else { return }
+            DispatchQueue.main.async {
+                do { oldName = nil; editing = try importedProfile(from: url) } catch { importError = error.localizedDescription }
+            }
+        }
+        return true
+    }
+
+    private func discoverInstalledProfiles() -> [DiscoveredVPNProfile] {
+        let home = FileManager.default.homeDirectoryForCurrentUser
+        let roots = [
+            home.appendingPathComponent("Library/Application Support/OpenVPN Connect/profiles"),
+            home.appendingPathComponent("Library/Application Support/OpenVPN"),
+            home.appendingPathComponent("Library/Application Support/Tunnelblick/Configurations"),
+            home.appendingPathComponent("Library/Application Support/Viscosity/OpenVPN"),
+            home.appendingPathComponent("Library/Application Support/Fortinet/FortiClient"),
+            URL(fileURLWithPath: "/Library/Application Support/Fortinet/FortiClient"),
+            URL(fileURLWithPath: "/Library/Application Support/OpenVPN"),
+            URL(fileURLWithPath: "/Library/Application Support/Tunnelblick/Shared")
+        ]
+        let extensions = Set(["ovpn", "conf", "xml", "plist", "mobileconfig", "fct", "fcconfig"])
+        var results: [DiscoveredVPNProfile] = []
+        var seen = Set<String>()
+        for root in roots where FileManager.default.fileExists(atPath: root.path) {
+            guard let enumerator = FileManager.default.enumerator(at: root, includingPropertiesForKeys: [.isRegularFileKey], options: [.skipsHiddenFiles, .skipsPackageDescendants]) else { continue }
+            for case let url as URL in enumerator {
+                guard results.count < 200, extensions.contains(url.pathExtension.lowercased()), seen.insert(url.standardizedFileURL.path).inserted else { continue }
+                let fortiProfiles = fortiClientProfiles(from: url)
+                if !fortiProfiles.isEmpty { results.append(contentsOf: fortiProfiles.map { DiscoveredVPNProfile(profile: $0, source: url) }) }
+                else if let profile = try? importedProfile(from: url) { results.append(DiscoveredVPNProfile(profile: profile, source: url)) }
+            }
+        }
+        return results.sorted { $0.profile.name.localizedCaseInsensitiveCompare($1.profile.name) == .orderedAscending }
+    }
+
+    private func fortiClientProfiles(from url: URL) -> [VPNProfile] {
+        guard url.pathExtension.lowercased() == "plist", let data = try? Data(contentsOf: url), let root = try? PropertyListSerialization.propertyList(from: data, options: [], format: nil) as? [String: Any], let profiles = root["Profiles"] as? [String: Any] else { return [] }
+        return profiles.compactMap { key, value in
+            guard let values = value as? [String: Any], let host = values["Server"] as? String, !host.isEmpty else { return nil }
+            var profile = VPNProfile()
+            profile.name = (values["Name"] as? String).flatMap { $0.isEmpty ? nil : $0 } ?? key
+            profile.host = host
+            if let port = values["ServerPort"] as? NSNumber { profile.port = port.stringValue }
+            profile.user = values["User"] as? String ?? ""
+            profile.description = values["Comment"] as? String ?? ""
+            let vpnType = (values["VpnType"] as? NSNumber)?.intValue ?? 0
+            profile.type = vpnType == 0 ? "openfortivpn" : "ipsec"
+            if profile.type == "ipsec" { profile.ipsec = IPSecSettings() }
+            return profile
+        }
     }
 
     private func xmlValue(_ names: [String], in text: String) -> String {

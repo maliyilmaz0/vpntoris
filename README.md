@@ -26,7 +26,8 @@ The user interface is a native SwiftUI tray app. A local Go service manages Dock
 - Event-specific notification preferences, sounds and quiet hours
 - Active route, per-process connection and container log views
 - Application-aware VPN flow visibility showing process name, PID, protocol, destination and selected profile
-- FortiClient and OpenVPN profile import with review before saving
+- Drag-and-drop OpenVPN/FortiClient profile import with review before saving
+- Automatic discovery of installed FortiClient, OpenVPN Connect, Tunnelblick and Viscosity profiles
 - Sanitized diagnostics ZIP export for support and troubleshooting
 - Verified update downloads using the SHA-256 file attached to each GitHub release
 - Secret-free JSON export and optional PBKDF2/AES-256-GCM encrypted profile backups
@@ -86,7 +87,7 @@ Enter backup gateway hostnames or IP addresses in the profile editor and choose 
 
 ## Profile import
 
-Choose **Import VPN Profile…** from the tray menu to select an OpenVPN `.ovpn` file or a FortiClient XML configuration. VPNToris extracts non-secret connection fields and opens the normal editor for review. Add the destination CIDRs and credentials before saving. Imported files are never copied into the repository.
+Drop an OpenVPN `.ovpn`/`.conf` or FortiClient export file directly onto the tray window, or choose **Import VPN Profile…** from the tray menu. The OpenVPN editor also has its own drop area. **Discover Installed VPN Profiles…** scans the standard macOS locations used by FortiClient, OpenVPN Connect, Tunnelblick and Viscosity, including FortiClient's multi-profile `vpn.plist`. VPNToris extracts non-secret connection fields and opens the normal editor for review. Passwords and pre-shared keys are not imported. Add the destination CIDRs and credentials before saving. Imported files are never copied into the repository.
 
 ## Command line
 

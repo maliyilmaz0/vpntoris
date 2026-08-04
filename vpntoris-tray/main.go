@@ -245,6 +245,30 @@ func dockerPath() string {
 	return ""
 }
 
+func dockerCommand(arguments ...string) *exec.Cmd {
+	docker := dockerPath()
+	if docker == "" {
+		docker = "docker"
+	}
+	directories := []string{filepath.Dir(docker), "/Applications/Docker.app/Contents/Resources/bin", "/usr/local/bin", "/opt/homebrew/bin", "/usr/bin", "/bin", "/usr/sbin", "/sbin"}
+	seen := map[string]bool{}
+	path := []string{}
+	for _, directory := range append(directories, filepath.SplitList(os.Getenv("PATH"))...) {
+		if directory != "" && !seen[directory] {
+			seen[directory] = true
+			path = append(path, directory)
+		}
+	}
+	command := exec.Command(docker, arguments...)
+	for _, value := range os.Environ() {
+		if !strings.HasPrefix(value, "PATH=") {
+			command.Env = append(command.Env, value)
+		}
+	}
+	command.Env = append(command.Env, "PATH="+strings.Join(path, string(os.PathListSeparator)))
+	return command
+}
+
 func setDockerBootstrap(state, message string) {
 	dockerBootstrap.Lock()
 	dockerBootstrap.State = state
@@ -258,7 +282,7 @@ func bootstrapDockerImage() {
 		setDockerBootstrap("missing", "Docker Desktop is not installed.")
 		return
 	}
-	if output, err := exec.Command(docker, "info", "--format", "{{.ServerVersion}}").CombinedOutput(); err != nil {
+	if output, err := dockerCommand("info", "--format", "{{.ServerVersion}}").CombinedOutput(); err != nil {
 		message := strings.TrimSpace(string(output))
 		if message == "" {
 			message = "Docker Desktop is installed but the engine is not running."
@@ -266,7 +290,7 @@ func bootstrapDockerImage() {
 		setDockerBootstrap("stopped", message)
 		return
 	}
-	if exec.Command(docker, "image", "inspect", imageName).Run() == nil {
+	if dockerCommand("image", "inspect", imageName).Run() == nil {
 		setDockerBootstrap("ready", "Docker image is ready.")
 		return
 	}
@@ -281,7 +305,7 @@ func bootstrapDockerImage() {
 		return
 	}
 	setDockerBootstrap("building", "Building the VPN client image for the first time…")
-	output, err := exec.Command(docker, "build", "-t", imageName, contextPath).CombinedOutput()
+	output, err := dockerCommand("build", "-t", imageName, contextPath).CombinedOutput()
 	if err != nil {
 		message := strings.TrimSpace(string(output))
 		if message == "" {
@@ -294,7 +318,7 @@ func bootstrapDockerImage() {
 }
 
 func proxyPort(container string) (string, error) {
-	output, err := exec.Command("docker", "port", container, "1080/tcp").Output()
+	output, err := dockerCommand("port", container, "1080/tcp").Output()
 	if err != nil {
 		return "", fmt.Errorf("could not find the VPN proxy port")
 	}
@@ -311,7 +335,7 @@ func containerPort(container, target string) (int, error) {
 	if docker == "" {
 		return 0, fmt.Errorf("docker is unavailable")
 	}
-	output, err := exec.Command(docker, "port", container, target).Output()
+	output, err := dockerCommand("port", container, target).Output()
 	if err != nil {
 		return 0, err
 	}
@@ -339,7 +363,7 @@ func splitValues(value string) []string {
 func resolveDomains(config VPNConfig) []string {
 	addresses := map[string]bool{}
 	for _, domain := range splitValues(config.Domains) {
-		output, err := exec.Command("docker", "exec", containerName(config.Name), "getent", "ahostsv4", domain).Output()
+		output, err := dockerCommand("exec", containerName(config.Name), "getent", "ahostsv4", domain).Output()
 		if err != nil {
 			continue
 		}
@@ -625,7 +649,7 @@ func handleDiagnosticsAPI(response http.ResponseWriter, _ *http.Request) {
 	if docker := dockerPath(); docker != "" {
 		writeDiagnosticCommand(archive, "docker-containers.txt", docker, "ps", "-a", "--filter", "label=vpntoris=true", "--format", "{{.Names}}\t{{.Status}}\t{{.Image}}")
 		for _, config := range configs {
-			output, _ := exec.Command(docker, "logs", "--tail", "500", containerName(config.Name)).CombinedOutput()
+			output, _ := dockerCommand("logs", "--tail", "500", containerName(config.Name)).CombinedOutput()
 			writeDiagnosticFile(archive, "logs/"+safeFileName(config.Name)+".log", []byte(sanitizeDiagnosticText(string(output))))
 		}
 	}
@@ -986,7 +1010,7 @@ func containerTraffic(container string) (uint64, uint64, error) {
 	if docker == "" {
 		return 0, 0, fmt.Errorf("docker is unavailable")
 	}
-	output, err := exec.Command(docker, "stats", "--no-stream", "--format", "{{.NetIO}}", container).Output()
+	output, err := dockerCommand("stats", "--no-stream", "--format", "{{.NetIO}}", container).Output()
 	if err != nil {
 		return 0, 0, err
 	}
@@ -1044,7 +1068,7 @@ func containerDuration(container string) int64 {
 	if docker == "" {
 		return 0
 	}
-	output, err := exec.Command(docker, "inspect", "--format", "{{.State.StartedAt}}", container).Output()
+	output, err := dockerCommand("inspect", "--format", "{{.State.StartedAt}}", container).Output()
 	if err != nil {
 		return 0
 	}
@@ -1398,9 +1422,9 @@ func handleLogsAPI(response http.ResponseWriter, request *http.Request) {
 		return
 	}
 	path := "/logs/" + selected.Name + ".log"
-	output, err := exec.Command("docker", "exec", containerName(selected.Name), "tail", "-n", "300", path).CombinedOutput()
+	output, err := dockerCommand("exec", containerName(selected.Name), "tail", "-n", "300", path).CombinedOutput()
 	if err != nil {
-		output, err = exec.Command("docker", "logs", "--tail", "300", containerName(selected.Name)).CombinedOutput()
+		output, err = dockerCommand("logs", "--tail", "300", containerName(selected.Name)).CombinedOutput()
 		if err != nil {
 			http.Error(response, strings.TrimSpace(string(output)), 500)
 			return
@@ -1473,12 +1497,12 @@ func containerName(name string) string {
 }
 
 func containerRunning(name string) bool {
-	out, err := exec.Command("docker", "inspect", "-f", "{{.State.Running}}", name).Output()
+	out, err := dockerCommand("inspect", "-f", "{{.State.Running}}", name).Output()
 	return err == nil && strings.TrimSpace(string(out)) == "true"
 }
 
 func containerHealthy(name string) bool {
-	out, err := exec.Command("docker", "inspect", "-f", "{{if .State.Health}}{{.State.Health.Status}}{{else}}{{.State.Status}}{{end}}", name).Output()
+	out, err := dockerCommand("inspect", "-f", "{{if .State.Health}}{{.State.Health.Status}}{{else}}{{.State.Status}}{{end}}", name).Output()
 	return err == nil && strings.TrimSpace(string(out)) == "healthy"
 }
 
@@ -1489,7 +1513,7 @@ func waitForContainerHealthy(name string, timeout time.Duration) error {
 			return nil
 		}
 		if !containerRunning(name) {
-			logs, _ := exec.Command("docker", "logs", "--tail", "40", name).CombinedOutput()
+			logs, _ := dockerCommand("logs", "--tail", "40", name).CombinedOutput()
 			return fmt.Errorf("VPN tunnel failed: %s", strings.TrimSpace(string(logs)))
 		}
 		time.Sleep(time.Second)
@@ -1669,7 +1693,7 @@ func connectVPN(config VPNConfig, otp ...string) error {
 		return fmt.Errorf("profile name and VPN type are required")
 	}
 	name := containerName(config.Name)
-	_ = exec.Command("docker", "rm", "-f", name).Run()
+	_ = dockerCommand("rm", "-f", name).Run()
 	profileDir := filepath.Join(filepath.Dir(configPath), "profiles", strings.TrimPrefix(name, "vpntoris-"))
 	if err := os.MkdirAll(profileDir, 0700); err != nil {
 		return fmt.Errorf("could not create profile directory: %w", err)
@@ -1719,7 +1743,7 @@ func connectVPN(config VPNConfig, otp ...string) error {
 		args = append(args, "-v", configFile+":/vpn/config.conf:ro", "-e", "VPN_CONFIG=/vpn/config.conf")
 	}
 	args = append(args, imageName)
-	output, err := exec.Command("docker", args...).CombinedOutput()
+	output, err := dockerCommand(args...).CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("could not start VPN: %s", strings.TrimSpace(string(output)))
 	}
@@ -1762,7 +1786,7 @@ func sendOTP(config VPNConfig, otp string) error {
 	if otp == "" || len(otp) > 32 {
 		return fmt.Errorf("invalid OTP code")
 	}
-	command := exec.Command("docker", "exec", "-i", containerName(config.Name), "/bin/bash", "-c", "cat > /run/vpntoris/otp")
+	command := dockerCommand("exec", "-i", containerName(config.Name), "/bin/bash", "-c", "cat > /run/vpntoris/otp")
 	command.Stdin = strings.NewReader(otp + "\n")
 	if output, err := command.CombinedOutput(); err != nil {
 		return fmt.Errorf("could not submit OTP: %s", strings.TrimSpace(string(output)))
@@ -2005,7 +2029,7 @@ secrets {
 }
 
 func disconnectVPN(name string) error {
-	output, err := exec.Command("docker", "rm", "-f", name).CombinedOutput()
+	output, err := dockerCommand("rm", "-f", name).CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("could not stop VPN: %s", strings.TrimSpace(string(output)))
 	}

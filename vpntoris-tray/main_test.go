@@ -124,3 +124,17 @@ func TestOverrideOpenVPNRemote(t *testing.T) {
 		t.Fatalf("OpenVPN configuration content was lost: %s", result)
 	}
 }
+
+func TestDockerCommandIncludesCredentialHelper(t *testing.T) {
+	command := dockerCommand("version")
+	path := ""
+	for _, value := range command.Env {
+		if strings.HasPrefix(value, "PATH=") {
+			path = strings.TrimPrefix(value, "PATH=")
+			break
+		}
+	}
+	if !strings.Contains(path, "/Applications/Docker.app/Contents/Resources/bin") {
+		t.Fatalf("Docker credential helper directory missing from PATH: %s", path)
+	}
+}

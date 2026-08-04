@@ -461,6 +461,75 @@ func openVPNRemote(in configuration: String) -> (host: String, port: String?)? {
     return nil
 }
 
+func bundledOpenVPNConfiguration(from url: URL) throws -> String {
+    let base = url.deletingLastPathComponent().standardizedFileURL.resolvingSymlinksInPath()
+    let configuration = try String(contentsOf: url, encoding: .utf8)
+    let supported = Set(["ca", "cert", "key", "tls-auth", "tls-crypt", "tls-crypt-v2", "pkcs12"])
+    var result: [String] = []
+    var inlineBlock = false
+    var totalBytes = configuration.utf8.count
+    for rawLine in configuration.components(separatedBy: .newlines) {
+        let trimmed = rawLine.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.hasPrefix("<") { inlineBlock = !trimmed.hasPrefix("</") }
+        if inlineBlock || trimmed.isEmpty || trimmed.hasPrefix("#") || trimmed.hasPrefix(";") {
+            result.append(rawLine)
+            continue
+        }
+        let fields = openVPNFields(trimmed)
+        guard fields.count >= 2, supported.contains(fields[0].lowercased()) else {
+            result.append(rawLine)
+            continue
+        }
+        let directive = fields[0].lowercased()
+        let candidate = URL(fileURLWithPath: fields[1], relativeTo: base).standardizedFileURL.resolvingSymlinksInPath()
+        let basePrefix = base.path.hasSuffix("/") ? base.path : base.path + "/"
+        guard candidate.path.hasPrefix(basePrefix) else {
+            throw NSError(domain: "VPNToris", code: 12, userInfo: [NSLocalizedDescriptionKey: "OpenVPN dependency must be inside the profile folder: \(fields[1])"])
+        }
+        let data = try Data(contentsOf: candidate, options: [.mappedIfSafe])
+        totalBytes += data.count
+        guard totalBytes <= 1024 * 1024 else {
+            throw NSError(domain: "VPNToris", code: 13, userInfo: [NSLocalizedDescriptionKey: "OpenVPN profile bundle exceeds 1 MB."])
+        }
+        let content: String
+        if directive == "pkcs12" {
+            content = data.base64EncodedString(options: [.lineLength64Characters, .endLineWithLineFeed])
+        } else {
+            guard let text = String(data: data, encoding: .utf8) else {
+                throw NSError(domain: "VPNToris", code: 14, userInfo: [NSLocalizedDescriptionKey: "OpenVPN dependency is not UTF-8 text: \(fields[1])"])
+            }
+            content = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        result.append("<\(directive)>")
+        result.append(content)
+        result.append("</\(directive)>")
+        if directive == "tls-auth", fields.count >= 3 { result.append("key-direction \(fields[2])") }
+    }
+    return result.joined(separator: "\n")
+}
+
+func openVPNFields(_ line: String) -> [String] {
+    var fields: [String] = []
+    var current = ""
+    var quote: Character?
+    var escaped = false
+    for character in line {
+        if escaped { current.append(character); escaped = false; continue }
+        if character == "\\" { escaped = true; continue }
+        if let active = quote {
+            if character == active { quote = nil } else { current.append(character) }
+            continue
+        }
+        if character == "\"" || character == "'" { quote = character; continue }
+        if character.isWhitespace {
+            if !current.isEmpty { fields.append(current); current = "" }
+        } else { current.append(character) }
+    }
+    if escaped { current.append("\\") }
+    if !current.isEmpty { fields.append(current) }
+    return fields
+}
+
 struct ProfileEditor: View {
     @Environment(\.dismiss) private var dismiss
     @State var profile: VPNProfile
@@ -572,7 +641,7 @@ struct ProfileEditor: View {
 
     private func importOpenVPNConfig(_ url: URL) {
         do {
-            let text = try String(contentsOf: url, encoding: .utf8)
+            let text = try bundledOpenVPNConfiguration(from: url)
             guard let remote = openVPNRemote(in: text) else { throw NSError(domain: "VPNToris", code: 2, userInfo: [NSLocalizedDescriptionKey: "This file does not contain an OpenVPN remote directive."]) }
             profile.type = "openvpn"
             profile.config = text
@@ -828,7 +897,8 @@ struct ContentView: View {
     private func importedProfile(from url: URL) throws -> VPNProfile {
         let scoped = url.startAccessingSecurityScopedResource()
         defer { if scoped { url.stopAccessingSecurityScopedResource() } }
-        let text = try String(contentsOf: url, encoding: .utf8)
+        let rawText = try String(contentsOf: url, encoding: .utf8)
+        let text = url.pathExtension.lowercased() == "ovpn" || rawText.contains("client\n") || rawText.contains("client\r\n") ? try bundledOpenVPNConfiguration(from: url) : rawText
         var profile = VPNProfile()
         profile.name = url.deletingPathExtension().lastPathComponent
         if url.pathExtension.lowercased() == "ovpn" || text.contains("client\n") || text.contains("client\r\n") {

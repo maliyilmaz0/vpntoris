@@ -155,6 +155,16 @@ cd ..
 
 The unsigned Universal DMG and PKG are written to `dist/`. Set `ARCH=arm64` or `ARCH=x86_64` to create a single-architecture build. Official signed and notarized installers are published on the GitHub Releases page.
 
+Generate the release component inventory (SBOM-style text report) with:
+
+```bash
+VERSION=1.2.0 ./scripts/generate-sbom.sh
+```
+
+The report is written to `dist/VPNToris-sbom.txt` and lists the Go module graph,
+Swift/Xcode toolchain and bundled VPN engine versions. It contains no credentials
+or profile data.
+
 ## Architecture
 
 ```text
@@ -166,6 +176,11 @@ Go controller ───── Docker Engine ───── one VPN + SOCKS cont
         ▼
 privileged route helper ───── tun2socks/utun ───── destination CIDR routes
 ```
+
+The current 1.x macOS release still uses Docker for profiles that require the
+container path. Native macOS engines are bundled for supported connection paths
+and do not download runtime dependencies. The complete Docker-free,
+cross-platform engine and Linux/Windows installers are planned for VPNToris 2.0.
 
 ## Upcoming
 

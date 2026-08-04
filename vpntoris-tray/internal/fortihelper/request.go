@@ -18,6 +18,7 @@ const (
 	ProtocolFortiGateSSL = "fortigate-ssl"
 	ProtocolOpenVPN      = "openvpn"
 	ProtocolOpenConnect  = "openconnect"
+	ProtocolIPSec        = "ipsec"
 )
 
 var profilePattern = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]{0,79}$`)
@@ -25,20 +26,42 @@ var hostnamePattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9.-]{0,252}$`)
 var digestPattern = regexp.MustCompile(`^[a-fA-F0-9]{64}$`)
 
 type Request struct {
-	Action          string   `json:"action"`
-	Profile         string   `json:"profile"`
-	Protocol        string   `json:"protocol,omitempty"`
-	Configuration   string   `json:"configuration,omitempty"`
-	Host            string   `json:"host,omitempty"`
-	Port            int      `json:"port,omitempty"`
-	Username        string   `json:"username,omitempty"`
-	Password        string   `json:"password,omitempty"`
-	OTP             string   `json:"otp,omitempty"`
-	TwoFactor       bool     `json:"twoFactor,omitempty"`
-	GatewayProtocol string   `json:"gatewayProtocol,omitempty"`
-	ExternalBrowser bool     `json:"externalBrowser,omitempty"`
-	TrustedCert     string   `json:"trustedCert,omitempty"`
-	Routes          []string `json:"routes,omitempty"`
+	Action          string        `json:"action"`
+	Profile         string        `json:"profile"`
+	Protocol        string        `json:"protocol,omitempty"`
+	Configuration   string        `json:"configuration,omitempty"`
+	Host            string        `json:"host,omitempty"`
+	Port            int           `json:"port,omitempty"`
+	Username        string        `json:"username,omitempty"`
+	Password        string        `json:"password,omitempty"`
+	OTP             string        `json:"otp,omitempty"`
+	TwoFactor       bool          `json:"twoFactor,omitempty"`
+	GatewayProtocol string        `json:"gatewayProtocol,omitempty"`
+	ExternalBrowser bool          `json:"externalBrowser,omitempty"`
+	TrustedCert     string        `json:"trustedCert,omitempty"`
+	Routes          []string      `json:"routes,omitempty"`
+	IPSec           *IPSecRequest `json:"ipsec,omitempty"`
+}
+
+type IPSecRequest struct {
+	Version       int    `json:"version"`
+	AuthMode      string `json:"authMode"`
+	PreSharedKey  string `json:"preSharedKey"`
+	LocalID       string `json:"localID"`
+	RemoteID      string `json:"remoteID"`
+	ModeConfig    bool   `json:"modeConfig"`
+	Aggressive    bool   `json:"aggressive"`
+	MOBIKE        bool   `json:"mobike"`
+	ForceEncap    bool   `json:"forceEncap"`
+	Fragmentation string `json:"fragmentation"`
+	DPDAction     string `json:"dpdAction"`
+	DPDDelay      int    `json:"dpdDelay"`
+	DPDTimeout    int    `json:"dpdTimeout"`
+	IKELifetime   int    `json:"ikeLifetime"`
+	ChildLifetime int    `json:"childLifetime"`
+	ReplayWindow  int    `json:"replayWindow"`
+	IKEProposals  string `json:"ikeProposals"`
+	ESPProposals  string `json:"espProposals"`
 }
 
 type Response struct {
@@ -78,7 +101,84 @@ func (request Request) validateStart() error {
 	if request.Protocol == ProtocolOpenConnect {
 		return request.validateOpenConnectStart()
 	}
+	if request.Protocol == ProtocolIPSec {
+		return request.validateIPSecStart()
+	}
 	return fmt.Errorf("unsupported VPN protocol")
+}
+
+func (request Request) validateIPSecStart() error {
+	if request.Host == "" || net.ParseIP(request.Host) == nil && !hostnamePattern.MatchString(request.Host) || strings.Contains(request.Host, "..") {
+		return fmt.Errorf("invalid VPN gateway")
+	}
+	if request.IPSec == nil {
+		return fmt.Errorf("IPsec settings are required")
+	}
+	settings := request.IPSec
+	if settings.Version != 1 && settings.Version != 2 {
+		return fmt.Errorf("invalid IKE version")
+	}
+	if settings.AuthMode != "none" && settings.AuthMode != "xauth" && settings.AuthMode != "eap" {
+		return fmt.Errorf("invalid IPsec authentication mode")
+	}
+	if settings.Version == 1 && settings.AuthMode == "eap" {
+		return fmt.Errorf("IKEv1 does not support EAP")
+	}
+	if settings.PreSharedKey == "" || len(settings.PreSharedKey) > 4096 || strings.ContainsAny(settings.PreSharedKey, "\r\n\x00{}\"") {
+		return fmt.Errorf("invalid IPsec pre-shared key")
+	}
+	if settings.AuthMode != "none" && (request.Username == "" || request.Password == "") {
+		return fmt.Errorf("IPsec extended authentication credentials are required")
+	}
+	for _, value := range []string{request.Username, request.Password, settings.LocalID, settings.RemoteID} {
+		if len(value) > 4096 || strings.ContainsAny(value, "\r\n\x00{}\"") {
+			return fmt.Errorf("invalid IPsec identity or credential")
+		}
+	}
+	proposalPattern := regexp.MustCompile(`^[a-z0-9_-]+(?:-[a-z0-9_-]+)*(?:,[a-z0-9_-]+(?:-[a-z0-9_-]+)*)*$`)
+	if !proposalPattern.MatchString(settings.IKEProposals) || !proposalPattern.MatchString(settings.ESPProposals) {
+		return fmt.Errorf("invalid IPsec proposal")
+	}
+	if settings.Fragmentation != "yes" && settings.Fragmentation != "no" && settings.Fragmentation != "accept" {
+		return fmt.Errorf("invalid fragmentation setting")
+	}
+	if settings.DPDAction != "none" && settings.DPDAction != "clear" && settings.DPDAction != "hold" && settings.DPDAction != "restart" {
+		return fmt.Errorf("invalid DPD action")
+	}
+	if settings.DPDDelay < 0 || settings.DPDDelay > 3600 || settings.DPDTimeout < 0 || settings.DPDTimeout > 86400 || settings.IKELifetime < 60 || settings.IKELifetime > 604800 || settings.ChildLifetime < 60 || settings.ChildLifetime > 604800 || settings.ReplayWindow < 1 || settings.ReplayWindow > 4096 {
+		return fmt.Errorf("invalid IPsec timing setting")
+	}
+	return request.validateRoutes()
+}
+
+func (request Request) IPSecConfiguration() string {
+	settings := request.IPSec
+	localID := settings.LocalID
+	if localID == "" {
+		localID = request.Username
+	}
+	remoteID := settings.RemoteID
+	if remoteID == "" {
+		remoteID = "%any"
+	}
+	vips := ""
+	if settings.ModeConfig {
+		vips = "    vips = 0.0.0.0\n"
+	}
+	aggressive := ""
+	if settings.Version == 1 && settings.Aggressive {
+		aggressive = "    aggressive = yes\n"
+	}
+	auth := fmt.Sprintf("    local {\n      auth = psk\n      id = %q\n    }\n    remote {\n      auth = psk\n      id = %q\n    }\n", localID, remoteID)
+	secrets := fmt.Sprintf("  ike-%s {\n    id = %q\n    secret = %q\n  }\n", request.Profile, localID, settings.PreSharedKey)
+	if settings.AuthMode == "xauth" {
+		auth += fmt.Sprintf("    local-xauth {\n      auth = xauth\n      xauth_id = %q\n    }\n", request.Username)
+		secrets += fmt.Sprintf("  xauth-%s {\n    id = %q\n    secret = %q\n  }\n", request.Profile, request.Username, request.Password)
+	} else if settings.AuthMode == "eap" {
+		auth += fmt.Sprintf("    local-eap {\n      auth = eap\n      eap_id = %q\n    }\n", request.Username)
+		secrets += fmt.Sprintf("  eap-%s {\n    id = %q\n    secret = %q\n  }\n", request.Profile, request.Username, request.Password)
+	}
+	return fmt.Sprintf("connections {\n  %s {\n    version = %d\n    remote_addrs = %s\n    proposals = %s\n    rekey_time = %ds\n    dpd_delay = %ds\n    dpd_timeout = %ds\n    fragmentation = %s\n    mobike = %t\n    encap = %t\n%s%s%s    children {\n      net-%s {\n        local_ts = dynamic\n        remote_ts = %s\n        esp_proposals = %s\n        life_time = %ds\n        replay_window = %d\n        dpd_action = %s\n      }\n    }\n  }\n}\nsecrets {\n%s}\n", request.Profile, settings.Version, request.Host, settings.IKEProposals, settings.IKELifetime, settings.DPDDelay, settings.DPDTimeout, settings.Fragmentation, settings.MOBIKE, settings.ForceEncap, aggressive, vips, auth, request.Profile, strings.Join(request.Routes, ","), settings.ESPProposals, settings.ChildLifetime, settings.ReplayWindow, settings.DPDAction, secrets)
 }
 
 func (request Request) validateOpenConnectStart() error {

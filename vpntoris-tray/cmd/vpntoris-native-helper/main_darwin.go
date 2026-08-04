@@ -54,10 +54,15 @@ type session struct {
 }
 
 type server struct {
-	mu         sync.Mutex
-	engineRoot string
-	userID     int
-	sessions   map[string]*session
+	mu           sync.Mutex
+	engineRoot   string
+	userID       int
+	sessions     map[string]*session
+	ipsecCommand *exec.Cmd
+	ipsecLog     *os.File
+	ipsecSocket  string
+	ipsecConfig  string
+	ipsecSwanctl string
 }
 
 func main() {
@@ -153,6 +158,9 @@ func (service *server) start(request fortihelper.Request) fortihelper.Response {
 	protocol := request.Protocol
 	if protocol == "" {
 		protocol = fortihelper.ProtocolFortiGateSSL
+	}
+	if protocol == fortihelper.ProtocolIPSec {
+		return service.startIPSecLocked(request)
 	}
 	engineName := "openfortivpn"
 	if protocol == fortihelper.ProtocolOpenVPN {
@@ -393,6 +401,10 @@ func (service *server) stop(profile string) fortihelper.Response {
 }
 
 func (service *server) stopLocked(current *session) {
+	if current.request.Protocol == fortihelper.ProtocolIPSec {
+		service.stopIPSecLocked(current)
+		return
+	}
 	if current.interfaceName != "" {
 		deleteRoutes(current.interfaceName, current.request.Routes)
 		current.interfaceName = ""
@@ -412,6 +424,154 @@ func (service *server) stopLocked(current *session) {
 		_ = syscall.Kill(-current.command.Process.Pid, syscall.SIGTERM)
 	}
 	current.state = "stopped"
+}
+
+func (service *server) startIPSecLocked(request fortihelper.Request) fortihelper.Response {
+	if request.TwoFactor {
+		return fortihelper.Response{State: "failed", Error: "native IPsec OTP requires the interactive XAuth plugin"}
+	}
+	if err := service.ensureIPSecDaemonLocked(); err != nil {
+		return fortihelper.Response{State: "failed", Error: err.Error()}
+	}
+	configPath := filepath.Join(runtimeDirectory, request.Profile+"-ipsec.conf")
+	if err := os.WriteFile(configPath, []byte(request.IPSecConfiguration()), 0600); err != nil {
+		return fortihelper.Response{State: "failed", Error: err.Error()}
+	}
+	logPath := filepath.Join(logDirectory, request.Profile+".log")
+	logFile, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0640)
+	if err != nil {
+		_ = os.Remove(configPath)
+		return fortihelper.Response{State: "failed", Error: err.Error()}
+	}
+	_ = logFile.Chown(service.userID, -1)
+	load := service.ipsecCommandFor("--load-all", "--file", configPath, "--noprompt")
+	load.Stdout = logFile
+	load.Stderr = logFile
+	if err := load.Run(); err != nil {
+		logFile.Close()
+		_ = os.Remove(configPath)
+		return fortihelper.Response{State: "failed", Error: "could not load native IPsec profile"}
+	}
+	initiate := service.ipsecCommandFor("--initiate", "--child", "net-"+request.Profile, "--timeout", "45", "--loglevel", "2")
+	initiate.Stdout = logFile
+	initiate.Stderr = logFile
+	if err := initiate.Run(); err != nil {
+		logFile.Close()
+		_ = os.Remove(configPath)
+		return fortihelper.Response{State: "failed", Error: "native IPsec negotiation failed"}
+	}
+	logFile.Close()
+	request.Password = ""
+	request.IPSec.PreSharedKey = ""
+	current := &session{request: request, logPath: logPath, configPath: configPath, state: "connected", startedAt: time.Now()}
+	service.sessions[request.Profile] = current
+	return fortihelper.Response{State: "connected"}
+}
+
+func (service *server) ensureIPSecDaemonLocked() error {
+	if service.ipsecCommand != nil && service.ipsecCommand.Process != nil {
+		return nil
+	}
+	manifestPath := filepath.Join(service.engineRoot, "strongswan", "manifest.json")
+	_, executable, err := nativeengine.LoadEngineManifest(service.engineRoot, manifestPath)
+	if err != nil {
+		return err
+	}
+	enginePath := filepath.Dir(filepath.Dir(executable))
+	service.ipsecSocket = filepath.Join(runtimeDirectory, "charon.vici")
+	service.ipsecConfig = filepath.Join(runtimeDirectory, "strongswan.conf")
+	service.ipsecSwanctl = filepath.Join(enginePath, "bin", "swanctl")
+	configuration := fmt.Sprintf("libstrongswan {\n  plugin_dir = %s\n}\ncharon {\n  install_routes = yes\n  load_modular = yes\n  plugins {\n    random { load = yes }\n    nonce { load = yes }\n    x509 { load = yes }\n    revocation { load = yes }\n    constraints { load = yes }\n    pubkey { load = yes }\n    pkcs1 { load = yes }\n    pkcs8 { load = yes }\n    pem { load = yes }\n    openssl { load = yes }\n    kernel-pfkey { load = yes }\n    kernel-pfroute { load = yes }\n    socket-default { load = yes }\n    vici {\n      load = yes\n      socket = unix://%s\n    }\n    eap-identity { load = yes }\n    eap-mschapv2 { load = yes }\n    eap-md5 { load = yes }\n    eap-gtc { load = yes }\n    eap-peap { load = yes }\n    xauth-generic { load = yes }\n    unity { load = yes }\n    counters { load = yes }\n    curve25519 { load = yes }\n    kdf { load = yes }\n  }\n}\n", filepath.Join(enginePath, "plugins"), service.ipsecSocket)
+	if err := os.WriteFile(service.ipsecConfig, []byte(configuration), 0600); err != nil {
+		return err
+	}
+	logPath := filepath.Join(logDirectory, "ipsec-daemon.log")
+	logFile, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0640)
+	if err != nil {
+		return err
+	}
+	_ = logFile.Chown(service.userID, -1)
+	command := exec.Command(executable)
+	command.Stdout = logFile
+	command.Stderr = logFile
+	command.Env = service.ipsecEnvironment()
+	command.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	if err := command.Start(); err != nil {
+		logFile.Close()
+		return err
+	}
+	service.ipsecCommand = command
+	service.ipsecLog = logFile
+	deadline := time.Now().Add(8 * time.Second)
+	for time.Now().Before(deadline) {
+		if info, statErr := os.Stat(service.ipsecSocket); statErr == nil && info.Mode()&os.ModeSocket != 0 {
+			go service.waitForIPSecDaemon(command, logFile)
+			return nil
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	_ = syscall.Kill(-command.Process.Pid, syscall.SIGTERM)
+	service.ipsecCommand = nil
+	logFile.Close()
+	return fmt.Errorf("native IPsec daemon did not become ready")
+}
+
+func (service *server) waitForIPSecDaemon(command *exec.Cmd, logFile *os.File) {
+	waitError := command.Wait()
+	service.mu.Lock()
+	defer service.mu.Unlock()
+	_ = logFile.Close()
+	if service.ipsecCommand != command {
+		return
+	}
+	service.ipsecCommand = nil
+	service.ipsecLog = nil
+	_ = os.Remove(service.ipsecSocket)
+	for _, current := range service.sessions {
+		if current.request.Protocol == fortihelper.ProtocolIPSec && current.state == "connected" {
+			current.state = "failed"
+			current.errorText = "native IPsec service stopped"
+			if waitError != nil {
+				current.errorText = "native IPsec service exited unexpectedly"
+			}
+		}
+	}
+}
+
+func (service *server) ipsecEnvironment() []string {
+	return []string{"PATH=/usr/bin:/bin:/usr/sbin:/sbin", "LANG=C", "LC_ALL=C", "STRONGSWAN_CONF=" + service.ipsecConfig}
+}
+
+func (service *server) ipsecCommandFor(arguments ...string) *exec.Cmd {
+	arguments = append(arguments, "--uri", "unix://"+service.ipsecSocket)
+	command := exec.Command(service.ipsecSwanctl, arguments...)
+	command.Env = service.ipsecEnvironment()
+	return command
+}
+
+func (service *server) stopIPSecLocked(current *session) {
+	terminate := service.ipsecCommandFor("--terminate", "--ike", current.request.Profile, "--timeout", "10")
+	_ = terminate.Run()
+	if current.configPath != "" {
+		_ = os.Remove(current.configPath)
+		current.configPath = ""
+	}
+	current.state = "stopped"
+	active := false
+	for _, candidate := range service.sessions {
+		if candidate != current && candidate.request.Protocol == fortihelper.ProtocolIPSec && candidate.state == "connected" {
+			active = true
+			break
+		}
+	}
+	if !active && service.ipsecCommand != nil && service.ipsecCommand.Process != nil {
+		command := service.ipsecCommand
+		service.ipsecCommand = nil
+		service.ipsecLog = nil
+		_ = syscall.Kill(-command.Process.Pid, syscall.SIGTERM)
+		_ = os.Remove(service.ipsecSocket)
+		_ = os.Remove(service.ipsecConfig)
+	}
 }
 
 func (service *server) status(profile string) fortihelper.Response {

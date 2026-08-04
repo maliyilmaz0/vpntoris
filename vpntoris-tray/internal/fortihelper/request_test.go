@@ -133,3 +133,22 @@ func TestIPSecRequestRejectsConfigurationInjection(t *testing.T) {
 		t.Fatal("accepted an injected IPsec proposal")
 	}
 }
+
+func TestIPSecRequestAllowsQuotedCredentials(t *testing.T) {
+	request := Request{
+		Action: ActionStart, Profile: "test-profile", Protocol: ProtocolIPSec,
+		Host: "vpn.example.invalid", Username: "test-user", Password: `quoted"password`, Routes: []string{"198.51.100.0/24"},
+		IPSec: &IPSecRequest{
+			Version: 1, AuthMode: "xauth", PreSharedKey: `quoted"key`, Fragmentation: "yes", DPDAction: "restart",
+			DPDDelay: 30, DPDTimeout: 150, IKELifetime: 28800, ChildLifetime: 3600, ReplayWindow: 32,
+			IKEProposals: "aes256-sha256-modp2048", ESPProposals: "aes256-sha256-modp2048",
+		},
+	}
+	if err := request.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	configuration := request.IPSecConfiguration()
+	if !strings.Contains(configuration, `secret = "quoted\"key"`) || !strings.Contains(configuration, `secret = "quoted\"password"`) {
+		t.Fatal("quoted credentials were not safely escaped in strongSwan configuration")
+	}
+}

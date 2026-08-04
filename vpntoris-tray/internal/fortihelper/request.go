@@ -124,14 +124,14 @@ func (request Request) validateIPSecStart() error {
 	if settings.Version == 1 && settings.AuthMode == "eap" {
 		return fmt.Errorf("IKEv1 does not support EAP")
 	}
-	if settings.PreSharedKey == "" || len(settings.PreSharedKey) > 4096 || strings.ContainsAny(settings.PreSharedKey, "\r\n\x00{}\"") {
+	if settings.PreSharedKey == "" || len(settings.PreSharedKey) > 4096 || strings.ContainsAny(settings.PreSharedKey, "\r\n\x00") {
 		return fmt.Errorf("invalid IPsec pre-shared key")
 	}
 	if settings.AuthMode != "none" && (request.Username == "" || request.Password == "") {
 		return fmt.Errorf("IPsec extended authentication credentials are required")
 	}
 	for _, value := range []string{request.Username, request.Password, settings.LocalID, settings.RemoteID} {
-		if len(value) > 4096 || strings.ContainsAny(value, "\r\n\x00{}\"") {
+		if len(value) > 4096 || strings.ContainsAny(value, "\r\n\x00") {
 			return fmt.Errorf("invalid IPsec identity or credential")
 		}
 	}

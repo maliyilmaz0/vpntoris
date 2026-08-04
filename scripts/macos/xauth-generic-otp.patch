@@ -10,49 +10,33 @@
  
  typedef struct private_xauth_generic_t private_xauth_generic_t;
  
-@@ -57,12 +60,14 @@
- 	shared_key_t *shared;
- 	cp_payload_t *cp;
- 	chunk_t msg;
-+	bool otp_challenge = FALSE;
- 
- 	enumerator = in->create_attribute_enumerator(in);
- 	while (enumerator->enumerate(enumerator, &attr))
- 	{
- 		if (attr->get_type(attr) == XAUTH_MESSAGE)
- 		{
-+			otp_challenge = TRUE;
- 			chunk_printable(attr->get_chunk(attr), &msg, '?');
- 			DBG1(DBG_CFG, "XAuth message: %.*s", (int)msg.len, msg.ptr);
- 			free(msg.ptr);
-@@ -88,6 +93,30 @@
+@@ -87,6 +90,29 @@
+ 			case XAUTH_NEXT_PIN:
  				type = SHARED_PIN;
  				/* FALL */
- 			case XAUTH_USER_PASSWORD:
-+				/* The native helper creates this FIFO only for an OTP session. */
-+				if (otp_challenge && access("/var/run/vpntoris-native/ipsec-otp", F_OK) == 0)
-+				{
-+					FILE *otp_file;
-+					char otp[128];
-+					size_t len;
++			case XAUTH_PASSCODE:
++			{
++				FILE *otp_file;
++				char otp[128];
++				size_t len;
 +
-+					DBG1(DBG_IKE, "waiting for VPNToris XAuth passcode");
-+					otp_file = fopen("/var/run/vpntoris-native/ipsec-otp", "r");
-+					if (!otp_file || !fgets(otp, sizeof(otp), otp_file))
-+					{
-+						if (otp_file) { fclose(otp_file); }
-+						enumerator->destroy(enumerator);
-+						cp->destroy(cp);
-+						return FAILED;
-+					}
-+					fclose(otp_file);
-+					len = strcspn(otp, "\r\n");
-+					cp->add_attribute(cp, configuration_attribute_create_chunk(
-+							PLV1_CONFIGURATION_ATTRIBUTE, XAUTH_USER_PASSWORD,
-+							chunk_clone(chunk_create(otp, len))));
-+					DBG1(DBG_IKE, "submitted VPNToris XAuth passcode");
-+					break;
++				DBG1(DBG_IKE, "waiting for VPNToris XAuth passcode");
++				otp_file = fopen("/var/run/vpntoris-native/ipsec-otp", "r");
++				if (!otp_file || !fgets(otp, sizeof(otp), otp_file))
++				{
++					if (otp_file) { fclose(otp_file); }
++					enumerator->destroy(enumerator);
++					cp->destroy(cp);
++					return FAILED;
 +				}
++				fclose(otp_file);
++				len = strcspn(otp, "\r\n");
++				cp->add_attribute(cp, configuration_attribute_create_chunk(
++							PLV1_CONFIGURATION_ATTRIBUTE, XAUTH_PASSCODE,
++							chunk_clone(chunk_create(otp, len))));
++				DBG1(DBG_IKE, "submitted VPNToris XAuth passcode");
++				break;
++			}
+ 			case XAUTH_USER_PASSWORD:
  				shared = lib->credmgr->get_shared(lib->credmgr, type,
  												  this->peer, this->server);
- 				if (!shared)

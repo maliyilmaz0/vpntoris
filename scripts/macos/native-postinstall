@@ -9,6 +9,10 @@ console_uid=$(stat -f %u /dev/console)
 chown root:wheel "$plist" /Library/PrivilegedHelperTools/com.vpntoris.native-helper
 chmod 0644 "$plist"
 chmod 0755 /Library/PrivilegedHelperTools/com.vpntoris.native-helper
+# A running charon keeps the previous plugin image mapped in memory. Stop only
+# VPNToris' bundled daemons so the next helper instance loads the new engine.
+/usr/bin/pkill -TERM -f '/Library/Application Support/VPNToris/Engines/darwin-[^ ]*/strongswan/bin/charon' >/dev/null 2>&1 || true
+/bin/rm -f /var/run/vpntoris-native/charon.vici /var/run/vpntoris-native/charon.pid
 /bin/launchctl bootout "system/$label" >/dev/null 2>&1 || true
 /bin/launchctl bootstrap system "$plist"
 /bin/launchctl enable "system/$label"

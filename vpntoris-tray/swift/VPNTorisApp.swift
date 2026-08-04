@@ -23,6 +23,7 @@ struct VPNProfile: Codable, Identifiable, Hashable {
     var domains: String?
     var dnsServers: String?
     var config = ""
+    var openConnectProtocol: String?
     var ipsec: IPSecSettings?
 }
 
@@ -65,6 +66,7 @@ struct ProfileStatus: Codable, Identifiable {
     let name: String
     let description: String
     let type: String
+    let `protocol`: String
     let host: String
     let activeGateway: String
     let gatewayCount: Int
@@ -556,6 +558,17 @@ struct ProfileEditor: View {
             Text(title).font(.title2.bold())
             TextField("Profile name", text: $profile.name)
             Picker("VPN type", selection: $profile.type) { Text("FortiGate SSL VPN").tag("openfortivpn"); Text("FortiGate IPsec").tag("ipsec"); Text("GlobalProtect / OpenConnect").tag("openconnect"); Text("OpenVPN").tag("openvpn") }
+            if profile.type == "openconnect" {
+                Picker("Gateway protocol", selection: Binding(get: { profile.openConnectProtocol ?? "anyconnect" }, set: { profile.openConnectProtocol = $0 })) {
+                    Text("Cisco AnyConnect").tag("anyconnect")
+                    Text("Palo Alto GlobalProtect").tag("gp")
+                    Text("Pulse / Ivanti").tag("pulse")
+                    Text("Juniper Network Connect").tag("nc")
+                    Text("F5 BIG-IP").tag("f5")
+                    Text("Fortinet SSL VPN").tag("fortinet")
+                    Text("Array Networks").tag("array")
+                }
+            }
             HStack { TextField("Host", text: $profile.host); TextField("Port", text: $profile.port).frame(width: 80) }
             TextField("Backup gateways, one per line", text: Binding(get: { profile.backupGateways ?? "" }, set: { profile.backupGateways = $0 }), axis: .vertical).lineLimit(2...4)
             Stepper("Switch gateway after \(profile.failoverThreshold ?? 2) failed reconnect attempts", value: Binding(get: { max(profile.failoverThreshold ?? 2, 1) }, set: { profile.failoverThreshold = $0 }), in: 1...10)
@@ -759,7 +772,7 @@ struct ContentView: View {
                         VStack(alignment: .leading, spacing: 10) {
                             HStack {
                                 Image(systemName: profileTypeIcon(profile.type)).font(.title3).foregroundStyle(profile.connected ? .green : .secondary).frame(width: 28)
-                                VStack(alignment: .leading, spacing: 3) { Text(profile.name).font(.headline); Text("\(profileTypeName(profile.type)) · \(profile.activeGateway)").font(.caption).foregroundStyle(.secondary); if profile.gatewayCount > 1 { Text("Gateway failover · \(profile.gatewayCount) endpoints").font(.caption2).foregroundStyle(.orange) } }
+                                VStack(alignment: .leading, spacing: 3) { Text(profile.name).font(.headline); Text("\(profileTypeName(profile.type, protocol: profile.protocol)) · \(profile.activeGateway)").font(.caption).foregroundStyle(.secondary); if profile.gatewayCount > 1 { Text("Gateway failover · \(profile.gatewayCount) endpoints").font(.caption2).foregroundStyle(.orange) } }
                                 Spacer()
                                 if store.busy.contains(profile.name) && !profile.connected {
                                     ProgressView().controlSize(.small)
@@ -878,7 +891,7 @@ struct ContentView: View {
 
     private var requiresDocker: Bool { store.profiles.contains { $0.type != "openfortivpn" && $0.type != "openvpn" } }
 
-    private func profileTypeName(_ type: String) -> String { switch type { case "openfortivpn": return "FortiGate SSL VPN"; case "ipsec": return "FortiGate IPsec"; case "openconnect": return "GlobalProtect / OpenConnect"; case "openvpn": return "OpenVPN"; default: return "VPN" } }
+    private func profileTypeName(_ type: String, protocol value: String = "") -> String { switch type { case "openfortivpn": return "FortiGate SSL VPN"; case "ipsec": return "FortiGate IPsec"; case "openconnect": return ["anyconnect": "Cisco AnyConnect", "gp": "Palo Alto GlobalProtect", "pulse": "Pulse / Ivanti", "nc": "Juniper Network Connect", "f5": "F5 BIG-IP", "fortinet": "Fortinet SSL VPN", "array": "Array Networks"][value] ?? "OpenConnect"; case "openvpn": return "OpenVPN"; default: return "VPN" } }
     private func profileTypeIcon(_ type: String) -> String { switch type { case "ipsec": return "lock.shield.fill"; case "openconnect": return "network.badge.shield.half.filled"; case "openvpn": return "point.3.connected.trianglepath.dotted"; default: return "shield.lefthalf.filled" } }
 
     private func byteRate(_ value: Double) -> String { ByteCountFormatter.string(fromByteCount: Int64(value), countStyle: .file) + "/s" }

@@ -26,14 +26,14 @@ func TestContainerNameDoesNotAllowDockerNameInjection(t *testing.T) {
 }
 
 func TestParseRoutes(t *testing.T) {
-	routes, err := parseRoutes("10.68.0.0/16, 192.168.50.0/24")
+	routes, err := parseRoutes("198.51.100.0/24, 203.0.113.0/24")
 	if err != nil {
 		t.Fatalf("parseRoutes() error: %v", err)
 	}
-	if len(routes) != 2 || routes[0].network != "10.68.0.0" || routes[0].mask != "255.255.0.0" {
+	if len(routes) != 2 || routes[0].network != "198.51.100.0" || routes[0].mask != "255.255.255.0" {
 		t.Fatalf("unexpected routes: %#v", routes)
 	}
-	if _, err := parseRoutes("10.68.0.1"); err == nil {
+	if _, err := parseRoutes("198.51.100.1"); err == nil {
 		t.Fatal("parseRoutes() accepted an address without CIDR prefix")
 	}
 }
@@ -73,6 +73,18 @@ func TestRenderSwanctlConfig(t *testing.T) {
 		if !strings.Contains(configuration, expected) {
 			t.Errorf("missing %q in configuration", expected)
 		}
+	}
+}
+
+func TestOpenConnectProtocolDefaultsAndValidation(t *testing.T) {
+	if value := openConnectProtocol(VPNConfig{Type: "openconnect"}); value != "anyconnect" {
+		t.Fatalf("unexpected default protocol: %s", value)
+	}
+	if value := openConnectProtocol(VPNConfig{Type: "openconnect", OpenConnectProtocol: "gp"}); value != "gp" {
+		t.Fatalf("unexpected selected protocol: %s", value)
+	}
+	if value := openConnectProtocol(VPNConfig{Type: "openconnect", OpenConnectProtocol: "invalid"}); value != "" {
+		t.Fatalf("accepted unsupported protocol: %s", value)
 	}
 }
 

@@ -24,23 +24,24 @@ const imageName = "vpntoris-client:next-3"
 var safeNamePattern = regexp.MustCompile(`[^a-z0-9_.-]+`)
 
 type VPNConfig struct {
-	Name            string       `json:"name"`
-	Description     string       `json:"description"`
-	Type            string       `json:"type"`
-	Host            string       `json:"host"`
-	BackupGateways  string       `json:"backupGateways"`
-	FailoverLimit   int          `json:"failoverThreshold"`
-	Port            string       `json:"port"`
-	User            string       `json:"user"`
-	Password        string       `json:"password"`
-	TwoFactor       bool         `json:"twoFactor"`
-	AutoReconnect   bool         `json:"autoReconnect"`
-	ConnectOnLaunch bool         `json:"connectOnLaunch"`
-	Routes          string       `json:"routes"`
-	Domains         string       `json:"domains"`
-	DNSServers      string       `json:"dnsServers"`
-	Config          string       `json:"config"`
-	IPSec           *IPSecConfig `json:"ipsec,omitempty"`
+	Name                string       `json:"name"`
+	Description         string       `json:"description"`
+	Type                string       `json:"type"`
+	Host                string       `json:"host"`
+	BackupGateways      string       `json:"backupGateways"`
+	FailoverLimit       int          `json:"failoverThreshold"`
+	Port                string       `json:"port"`
+	User                string       `json:"user"`
+	Password            string       `json:"password"`
+	TwoFactor           bool         `json:"twoFactor"`
+	AutoReconnect       bool         `json:"autoReconnect"`
+	ConnectOnLaunch     bool         `json:"connectOnLaunch"`
+	Routes              string       `json:"routes"`
+	Domains             string       `json:"domains"`
+	DNSServers          string       `json:"dnsServers"`
+	Config              string       `json:"config"`
+	OpenConnectProtocol string       `json:"openConnectProtocol,omitempty"`
+	IPSec               *IPSecConfig `json:"ipsec,omitempty"`
 }
 
 type IPSecConfig struct {
@@ -1155,6 +1156,7 @@ type profileView struct {
 	Name          string `json:"name"`
 	Description   string `json:"description"`
 	Type          string `json:"type"`
+	Protocol      string `json:"protocol"`
 	Host          string `json:"host"`
 	ActiveHost    string `json:"activeGateway"`
 	GatewayCount  int    `json:"gatewayCount"`
@@ -1183,7 +1185,7 @@ func handleProfilesAPI(response http.ResponseWriter, _ *http.Request) {
 		}
 		gateways := gatewayCandidates(config)
 		profiles = append(profiles, profileView{
-			Name: config.Name, Description: config.Description, Type: config.Type,
+			Name: config.Name, Description: config.Description, Type: config.Type, Protocol: openConnectProtocol(config),
 			Host: config.Host, ActiveHost: activeGateway(config), GatewayCount: len(gateways), Routes: config.Routes,
 			Connected:     profileConnected(config),
 			TwoFactor:     config.TwoFactor,
@@ -1194,6 +1196,22 @@ func handleProfilesAPI(response http.ResponseWriter, _ *http.Request) {
 	}
 	response.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(response).Encode(profiles)
+}
+
+var openConnectProtocols = map[string]bool{"anyconnect": true, "gp": true, "pulse": true, "nc": true, "f5": true, "fortinet": true, "array": true}
+
+func openConnectProtocol(config VPNConfig) string {
+	if config.Type != "openconnect" {
+		return ""
+	}
+	value := strings.ToLower(strings.TrimSpace(config.OpenConnectProtocol))
+	if value == "" {
+		return "anyconnect"
+	}
+	if !openConnectProtocols[value] {
+		return ""
+	}
+	return value
 }
 
 func handleActionAPI(response http.ResponseWriter, request *http.Request) {

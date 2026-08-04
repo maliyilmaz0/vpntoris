@@ -47,6 +47,9 @@ type session struct {
 	password       string
 	challenge      string
 	challengeState string
+	received       uint64
+	sent           uint64
+	startedAt      time.Time
 }
 
 type server struct {
@@ -231,7 +234,7 @@ func (service *server) start(request fortihelper.Request) fortihelper.Response {
 		return fortihelper.Response{State: "failed", Error: err.Error()}
 	}
 	readInput.Close()
-	current := &session{request: request, command: command, input: writeInput, log: logFile, logPath: logPath, configPath: configPath, state: "connecting", username: request.Username, password: request.Password}
+	current := &session{request: request, command: command, input: writeInput, log: logFile, logPath: logPath, configPath: configPath, state: "connecting", username: request.Username, password: request.Password, startedAt: time.Now()}
 	if protocol == fortihelper.ProtocolOpenVPN {
 		current.managementPath = strings.TrimSuffix(configPath, ".ovpn") + ".sock"
 	}
@@ -380,7 +383,11 @@ func (service *server) status(profile string) fortihelper.Response {
 	if current == nil {
 		return fortihelper.Response{State: "stopped"}
 	}
-	return fortihelper.Response{State: current.state, Interface: current.interfaceName, Error: current.errorText}
+	duration := int64(0)
+	if !current.startedAt.IsZero() {
+		duration = int64(time.Since(current.startedAt).Seconds())
+	}
+	return fortihelper.Response{State: current.state, Interface: current.interfaceName, Error: current.errorText, Received: current.received, Sent: current.sent, Duration: duration}
 }
 
 func (service *server) finish(current *session, waitError error) {
@@ -473,10 +480,23 @@ func (service *server) manageOpenVPN(current *session) {
 	service.mu.Lock()
 	current.management = connection
 	service.mu.Unlock()
-	_, _ = connection.Write([]byte("state on\nhold release\n"))
+	_, _ = connection.Write([]byte("state on\nbytecount 1\nhold release\n"))
 	scanner := bufio.NewScanner(connection)
 	for scanner.Scan() {
 		line := scanner.Text()
+		if strings.HasPrefix(line, ">BYTECOUNT:") {
+			parts := strings.Split(strings.TrimPrefix(line, ">BYTECOUNT:"), ",")
+			if len(parts) == 2 {
+				received, receivedErr := strconv.ParseUint(parts[0], 10, 64)
+				sent, sentErr := strconv.ParseUint(parts[1], 10, 64)
+				if receivedErr == nil && sentErr == nil {
+					service.mu.Lock()
+					current.received = received
+					current.sent = sent
+					service.mu.Unlock()
+				}
+			}
+		}
 		if strings.Contains(line, ">PASSWORD:Need 'Auth' username/password") {
 			service.mu.Lock()
 			if strings.Contains(line, "SC:") {

@@ -961,6 +961,15 @@ func monitorTraffic() {
 		configs, _ := loadConfigs()
 		seen := make(map[string]bool)
 		for _, config := range configs {
+			if nativeOpenVPNSupported(config) {
+				received, sent, duration, err := nativeOpenVPNTraffic(config.Name)
+				if err != nil {
+					continue
+				}
+				seen[config.Name] = true
+				updateTrafficSnapshot(config.Name, received, sent, duration)
+				continue
+			}
 			container := containerName(config.Name)
 			if !containerRunning(container) {
 				continue
@@ -970,22 +979,7 @@ func monitorTraffic() {
 				continue
 			}
 			seen[config.Name] = true
-			now := time.Now()
-			trafficState.Lock()
-			previous := trafficState.items[config.Name]
-			item := trafficSnapshot{Name: config.Name, Received: received, Sent: sent, updatedAt: now, Duration: containerDuration(container)}
-			if !previous.updatedAt.IsZero() {
-				seconds := now.Sub(previous.updatedAt).Seconds()
-				if seconds > 0 && received >= previous.Received && sent >= previous.Sent {
-					receivedDelta := received - previous.Received
-					sentDelta := sent - previous.Sent
-					item.ReceiveBPS = float64(receivedDelta) / seconds
-					item.SendBPS = float64(sentDelta) / seconds
-					recordTrafficAnalytics(config.Name, receivedDelta, sentDelta)
-				}
-			}
-			trafficState.items[config.Name] = item
-			trafficState.Unlock()
+			updateTrafficSnapshot(config.Name, received, sent, containerDuration(container))
 		}
 		trafficState.Lock()
 		for name := range trafficState.items {
@@ -996,6 +990,25 @@ func monitorTraffic() {
 		trafficState.Unlock()
 		time.Sleep(time.Second)
 	}
+}
+
+func updateTrafficSnapshot(name string, received uint64, sent uint64, duration int64) {
+	now := time.Now()
+	trafficState.Lock()
+	defer trafficState.Unlock()
+	previous := trafficState.items[name]
+	item := trafficSnapshot{Name: name, Received: received, Sent: sent, updatedAt: now, Duration: duration}
+	if !previous.updatedAt.IsZero() {
+		seconds := now.Sub(previous.updatedAt).Seconds()
+		if seconds > 0 && received >= previous.Received && sent >= previous.Sent {
+			receivedDelta := received - previous.Received
+			sentDelta := sent - previous.Sent
+			item.ReceiveBPS = float64(receivedDelta) / seconds
+			item.SendBPS = float64(sentDelta) / seconds
+			recordTrafficAnalytics(name, receivedDelta, sentDelta)
+		}
+	}
+	trafficState.items[name] = item
 }
 
 func containerTraffic(container string) (uint64, uint64, error) {

@@ -42,6 +42,9 @@ type Response struct {
 	State     string `json:"state"`
 	Interface string `json:"interface,omitempty"`
 	Error     string `json:"error,omitempty"`
+	Received  uint64 `json:"received,omitempty"`
+	Sent      uint64 `json:"sent,omitempty"`
+	Duration  int64  `json:"duration,omitempty"`
 }
 
 func (request Request) Validate() error {

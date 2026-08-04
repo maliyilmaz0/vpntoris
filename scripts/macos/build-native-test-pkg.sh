@@ -14,6 +14,9 @@ fi
 stage_root=$(mktemp -d /tmp/vpntoris-native-pkg-root.XXXXXX)
 scripts_root=$(mktemp -d /tmp/vpntoris-native-pkg-scripts.XXXXXX)
 output_path=${1:-"$repo_root/.build/VPNToris-Native-Engine-2.0.0-test.pkg"}
+if [[ "$output_path" != /* ]]; then
+  output_path="$repo_root/$output_path"
+fi
 engine_root="$repo_root/.build/native-engines/darwin-arm64/openfortivpn"
 openvpn_root="$repo_root/.build/native-engines/darwin-arm64/openvpn"
 openvpn_intel_root="$repo_root/.build/native-engines/darwin-amd64/openvpn"
@@ -112,6 +115,7 @@ engine_sha256=$(shasum -a 256 "$packaged_engine/bin/openfortivpn" | awk '{print 
 ssl_sha256=$(shasum -a 256 "$packaged_engine/lib/libssl.3.dylib" | awk '{print $1}')
 crypto_sha256=$(shasum -a 256 "$packaged_engine/lib/libcrypto.3.dylib" | awk '{print $1}')
 jq -n --arg engine "$engine_sha256" --arg ssl "$ssl_sha256" --arg crypto "$crypto_sha256" '{id:"openfortivpn",protocol:"fortigate-ssl",version:"1.24.1",os:"darwin",architecture:"arm64",executable:"openfortivpn/bin/openfortivpn",sha256:$engine,license:"GPL-3.0-or-later WITH OpenSSL-exception",capabilities:["ppp","otp","split-route"],files:{"openfortivpn/lib/libssl.3.dylib":$ssl,"openfortivpn/lib/libcrypto.3.dylib":$crypto}}' > "$packaged_engine/manifest.json"
+chmod -R u+w "$stage_root"
 xattr -cr "$stage_root"
 /usr/sbin/dot_clean -m "$stage_root"
 rm -f "$output_path"

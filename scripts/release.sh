@@ -19,14 +19,20 @@ SIGN_IDENTITY=${SIGN_IDENTITY:-${VPNTORIS_MACOS_APPLICATION_IDENTITY:-}}
 INSTALLER_IDENTITY=${INSTALLER_IDENTITY:-${VPNTORIS_MACOS_INSTALLER_IDENTITY:-}}
 NOTARY_PROFILE=${NOTARY_PROFILE:-${VPNTORIS_MACOS_NOTARY_PROFILE:-}}
 UNSIGNED=false
+NOTARIZE=true
 
-if [[ ${1:-} == "--unsigned" ]]; then
-    UNSIGNED=true
-fi
+for argument in "$@"; do
+    case "$argument" in
+        --unsigned) UNSIGNED=true; NOTARIZE=false ;;
+        --skip-notarization) NOTARIZE=false ;;
+    esac
+done
 
 if [[ "$UNSIGNED" == false ]]; then
     : "${SIGN_IDENTITY:?Set VPNTORIS_MACOS_APPLICATION_IDENTITY in .env}"
     : "${INSTALLER_IDENTITY:?Set VPNTORIS_MACOS_INSTALLER_IDENTITY in .env}"
+fi
+if [[ "$NOTARIZE" == true ]]; then
     : "${NOTARY_PROFILE:?Set VPNTORIS_MACOS_NOTARY_PROFILE in .env}"
 fi
 
@@ -112,6 +118,8 @@ hdiutil create -volname "$APP_NAME" -srcfolder "$STAGE" -ov -format UDZO "$DMG"
 
 if [[ "$UNSIGNED" == false ]]; then
     codesign --force --timestamp --sign "$SIGN_IDENTITY" "$DMG"
+fi
+if [[ "$NOTARIZE" == true ]]; then
     xcrun notarytool submit "$DMG" --keychain-profile "$NOTARY_PROFILE" --wait
     xcrun stapler staple "$DMG"
     xcrun stapler validate "$DMG"
@@ -127,7 +135,7 @@ if [[ "$UNSIGNED" == false ]]; then
 fi
 pkgbuild "${PKG_ARGUMENTS[@]}" "$PKG"
 
-if [[ "$UNSIGNED" == false ]]; then
+if [[ "$NOTARIZE" == true ]]; then
     xcrun notarytool submit "$PKG" --keychain-profile "$NOTARY_PROFILE" --wait
     xcrun stapler staple "$PKG"
     xcrun stapler validate "$PKG"

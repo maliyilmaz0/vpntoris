@@ -42,7 +42,7 @@ The user interface is a native SwiftUI tray app. A local Go service manages Dock
 - Apple Silicon or Intel Mac (`arm64` or `x86_64`)
 - macOS 13 Ventura or later
 - [Docker Desktop for Mac](https://www.docker.com/products/docker-desktop/)
-- An administrator account for the one-time route-helper installation
+- An administrator account for the one-time route-helper installation through Terminal
 - Network access to the VPN gateway; IPsec commonly requires outbound UDP 500 and 4500
 - VPN credentials, remote gateway and the private CIDR routes supplied by your VPN administrator
 
@@ -53,7 +53,11 @@ VPNToris checks Docker automatically when it opens. If Docker Desktop is missing
 1. Download the notarized DMG from [Releases](https://github.com/maliyilmaz0/vpntoris/releases).
 2. Drag `VPNToris.app` to `Applications`.
 3. Open VPNToris. It prepares the VPN image and attempts to install a `vpntorisctl` symlink under `/opt/homebrew/bin` or `/usr/local/bin`. Start Docker Desktop from the warning if it is not already running.
-4. On the first connection, macOS asks for administrator authorization to install the routing helper.
+4. Install the routing helper once from Terminal. This uses the normal `sudo`/Touch ID path and prevents recurring AppleScript password dialogs:
+
+```bash
+sudo "/Applications/VPNToris.app/Contents/MacOS/vpntoris-route-helper" install "$(id -u)"
+```
 5. Add a profile, enter one or more destination networks in CIDR form (for example `10.38.0.0/16, 10.68.236.0/24`) and connect.
 
 Only the configured destinations go through a VPN. Normal internet traffic keeps using the Mac's existing default route. When private networks overlap, macOS selects the most specific matching route; avoid assigning the same prefix to two active profiles unless that is intentional.

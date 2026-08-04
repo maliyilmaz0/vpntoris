@@ -1219,6 +1219,7 @@ struct DiagnosticsView: View {
 struct TouchIDHelpView: View {
     @Environment(\.dismiss) private var dismiss
     private let command = "sudo sh -c 'touch /etc/pam.d/sudo_local; grep -q \"^[[:space:]]*auth[[:space:]].*pam_tid\\.so\" /etc/pam.d/sudo_local || printf \"auth       sufficient     pam_tid.so\\n\" >> /etc/pam.d/sudo_local' && sudo -k && sudo true"
+    private let helperCommand = "sudo \"/Applications/VPNToris.app/Contents/MacOS/vpntoris-route-helper\" install \"$(id -u)\""
     private var enabled: Bool {
         guard let text = try? String(contentsOfFile: "/etc/pam.d/sudo_local", encoding: .utf8) else { return false }
         return text.split(separator: "\n").contains { !$0.trimmingCharacters(in: .whitespaces).hasPrefix("#") && $0.contains("pam_tid.so") }
@@ -1229,8 +1230,9 @@ struct TouchIDHelpView: View {
             Text("This enables Touch ID for sudo commands in Terminal. It preserves existing PAM settings and uses sudo_local, which survives macOS updates.").font(.callout).foregroundStyle(.secondary)
             Text("Ready command").font(.headline)
             Text(command).font(.system(.caption, design: .monospaced)).textSelection(.enabled).padding(10).background(.quaternary, in: RoundedRectangle(cornerRadius: 8))
-            Text("The macOS administrator dialog used by AppleScript is separate from sudo and may still request your password. VPNToris will use a one-time privileged helper to remove repeated prompts.").font(.caption).foregroundStyle(.secondary)
-            HStack { Button("Open Terminal") { NSWorkspace.shared.open(URL(fileURLWithPath: "/System/Applications/Utilities/Terminal.app")) }; Spacer(); Button("Copy Command") { NSPasteboard.general.clearContents(); NSPasteboard.general.setString(command, forType: .string) }.buttonStyle(.borderedProminent); Button("Done") { dismiss() } }
+            Text("Install the route helper once through Terminal. VPNToris does not open an AppleScript password dialog; Terminal uses your normal sudo or Touch ID configuration.").font(.caption).foregroundStyle(.secondary)
+            Text(helperCommand).font(.system(.caption, design: .monospaced)).textSelection(.enabled).padding(9).background(.quaternary, in: RoundedRectangle(cornerRadius: 7))
+            HStack { Button("Open Terminal") { NSWorkspace.shared.open(URL(fileURLWithPath: "/System/Applications/Utilities/Terminal.app")) }; Button("Copy Helper Command") { NSPasteboard.general.clearContents(); NSPasteboard.general.setString(helperCommand, forType: .string) }; Spacer(); Button("Copy Touch ID Command") { NSPasteboard.general.clearContents(); NSPasteboard.general.setString(command, forType: .string) }.buttonStyle(.borderedProminent); Button("Done") { dismiss() } }
         }.padding(22).frame(width: 520)
     }
 }

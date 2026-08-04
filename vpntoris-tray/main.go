@@ -4,6 +4,7 @@ import (
 	"archive/zip"
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net"
 	"net/http"
@@ -461,6 +462,14 @@ type routerRequest struct {
 	DNSPort int      `json:"dnsPort"`
 }
 
+type routerOperationError struct {
+	message string
+}
+
+func (err routerOperationError) Error() string {
+	return err.message
+}
+
 func runRootRouter(key, port string, routes []proxyRoute, domains []string, dnsPort int, enabled bool) error {
 	portNumber := 0
 	if enabled {
@@ -478,22 +487,18 @@ func runRootRouter(key, port string, routes []proxyRoute, domains []string, dnsP
 	for _, route := range routes {
 		request.Routes = append(request.Routes, fmt.Sprintf("%s/%d", route.network, route.prefix))
 	}
-	firstError := sendRouterRequest(request)
-	if firstError == nil {
+	requestError := sendRouterRequest(request)
+	if requestError == nil {
 		return nil
 	}
-	if err := installRouterHelper(); err != nil {
-		return fmt.Errorf("privileged routing helper installation failed after %v: %w", firstError, err)
+	var operationError routerOperationError
+	if errors.As(requestError, &operationError) {
+		return fmt.Errorf("route helper could not apply routes: %w", operationError)
 	}
-	var lastError error
-	for attempts := 0; attempts < 30; attempts++ {
-		lastError = sendRouterRequest(request)
-		if lastError == nil {
-			return nil
-		}
-		time.Sleep(100 * time.Millisecond)
-	}
-	return fmt.Errorf("privileged routing helper did not start: %w", lastError)
+	executable, _ := os.Executable()
+	helper := filepath.Join(filepath.Dir(executable), "vpntoris-route-helper")
+	command := fmt.Sprintf("sudo %s install \"$(id -u)\"", shellQuote(helper))
+	return fmt.Errorf("routing helper is unavailable (%v). Run once in Terminal: %s", requestError, command)
 }
 
 func sendRouterRequest(request routerRequest) error {
@@ -512,25 +517,7 @@ func sendRouterRequest(request routerRequest) error {
 		return err
 	}
 	if response.Error != "" {
-		return fmt.Errorf("%s", response.Error)
-	}
-	return nil
-}
-
-func installRouterHelper() error {
-	executable, err := os.Executable()
-	if err != nil {
-		return err
-	}
-	helper := filepath.Join(filepath.Dir(executable), "vpntoris-route-helper")
-	command := strings.Join([]string{shellQuote(helper), "install", strconv.Itoa(os.Getuid())}, " ")
-	script := "do shell script " + strconv.Quote(command) + " with administrator privileges"
-	if output, err := exec.Command("/usr/bin/osascript", "-e", script).CombinedOutput(); err != nil {
-		message := strings.TrimSpace(string(output))
-		if message == "" {
-			message = err.Error()
-		}
-		return fmt.Errorf("%s", message)
+		return routerOperationError{message: response.Error}
 	}
 	return nil
 }
@@ -649,6 +636,8 @@ func handleDiagnosticsAPI(response http.ResponseWriter, _ *http.Request) {
 	writeDiagnosticCommand(archive, "system.txt", "/usr/bin/uname", "-a")
 	writeDiagnosticCommand(archive, "routes.txt", "/usr/sbin/netstat", "-rn", "-f", "inet")
 	writeDiagnosticCommand(archive, "dns.txt", "/usr/sbin/scutil", "--dns")
+	writeDiagnosticCommand(archive, "route-helper-launchd.txt", "/bin/launchctl", "print", "system/com.vpntoris.router")
+	writeDiagnosticCommand(archive, "route-helper-socket.txt", "/usr/bin/stat", "-f", "%Sp %Su:%Sg %N", "/var/run/vpntoris", "/var/run/vpntoris/router.sock", "/Library/PrivilegedHelperTools/com.vpntoris.router", "/Library/PrivilegedHelperTools/com.vpntoris.tun2socks")
 	if docker := dockerPath(); docker != "" {
 		writeDiagnosticCommand(archive, "docker-containers.txt", docker, "ps", "-a", "--filter", "label=vpntoris=true", "--format", "{{.Names}}\t{{.Status}}\t{{.Image}}")
 		for _, config := range configs {

@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"sync"
@@ -22,11 +23,14 @@ import (
 const socketPath = "/var/run/vpntoris-native/helper.sock"
 const logDirectory = "/var/log/vpntoris"
 
+var pppReadyPattern = regexp.MustCompile(`(?m)Interface (ppp[0-9]+) is UP\.`)
+
 type session struct {
 	request       fortihelper.Request
 	command       *exec.Cmd
 	input         *os.File
 	log           *os.File
+	logPath       string
 	interfaceName string
 	state         string
 	errorText     string
@@ -64,7 +68,10 @@ func (service *server) serve(uid int) error {
 	if err := os.MkdirAll(filepath.Dir(socketPath), 0711); err != nil {
 		return err
 	}
-	if err := os.MkdirAll(logDirectory, 0750); err != nil {
+	if err := os.MkdirAll(logDirectory, 0751); err != nil {
+		return err
+	}
+	if err := os.Chmod(logDirectory, 0751); err != nil {
 		return err
 	}
 	_ = os.Remove(socketPath)
@@ -127,10 +134,6 @@ func (service *server) start(request fortihelper.Request) fortihelper.Response {
 	if err != nil {
 		return fortihelper.Response{State: "failed", Error: err.Error()}
 	}
-	before, err := pppInterfaces()
-	if err != nil {
-		return fortihelper.Response{State: "failed", Error: err.Error()}
-	}
 	readInput, writeInput, err := os.Pipe()
 	if err != nil {
 		return fortihelper.Response{State: "failed", Error: err.Error()}
@@ -161,7 +164,7 @@ func (service *server) start(request fortihelper.Request) fortihelper.Response {
 		return fortihelper.Response{State: "failed", Error: err.Error()}
 	}
 	readInput.Close()
-	current := &session{request: request, command: command, input: writeInput, log: logFile, state: "connecting"}
+	current := &session{request: request, command: command, input: writeInput, log: logFile, logPath: logPath, state: "connecting"}
 	current.request.Password = ""
 	current.request.OTP = ""
 	service.sessions[request.Profile] = current
@@ -177,11 +180,11 @@ func (service *server) start(request fortihelper.Request) fortihelper.Response {
 	}
 	request.Password = ""
 	request.OTP = ""
-	go service.monitor(current, before)
+	go service.monitor(current)
 	return fortihelper.Response{State: "connecting"}
 }
 
-func (service *server) monitor(current *session, before map[string]bool) {
+func (service *server) monitor(current *session) {
 	wait := make(chan error, 1)
 	go func() { wait <- current.command.Wait() }()
 	deadline := time.NewTimer(45 * time.Second)
@@ -198,7 +201,7 @@ func (service *server) monitor(current *session, before map[string]bool) {
 			go service.finish(current, <-wait)
 			return
 		case <-ticker.C:
-			interfaceName := newPPPInterface(before)
+			interfaceName := interfaceFromLog(current.logPath)
 			if interfaceName == "" {
 				continue
 			}
@@ -303,31 +306,21 @@ func (service *server) fail(current *session, message string) {
 	current.state = "failed"
 }
 
-func pppInterfaces() (map[string]bool, error) {
-	interfaces, err := net.Interfaces()
-	if err != nil {
-		return nil, err
-	}
-	result := make(map[string]bool)
-	for _, networkInterface := range interfaces {
-		if strings.HasPrefix(networkInterface.Name, "ppp") {
-			result[networkInterface.Name] = true
-		}
-	}
-	return result, nil
-}
-
-func newPPPInterface(before map[string]bool) string {
-	interfaces, err := net.Interfaces()
+func interfaceFromLog(path string) string {
+	data, err := os.ReadFile(path)
 	if err != nil {
 		return ""
 	}
-	for _, networkInterface := range interfaces {
-		if strings.HasPrefix(networkInterface.Name, "ppp") && !before[networkInterface.Name] && networkInterface.Flags&net.FlagUp != 0 {
-			return networkInterface.Name
-		}
+	matches := pppReadyPattern.FindSubmatch(data)
+	if len(matches) != 2 {
+		return ""
 	}
-	return ""
+	interfaceName := string(matches[1])
+	networkInterface, err := net.InterfaceByName(interfaceName)
+	if err != nil || networkInterface.Flags&net.FlagUp == 0 {
+		return ""
+	}
+	return interfaceName
 }
 
 func addRoutes(interfaceName string, routes []string) error {

@@ -664,7 +664,7 @@ struct ContentView: View {
                 Button { oldName = nil; editing = VPNProfile() } label: { Image(systemName: "plus") }.buttonStyle(.bordered)
             }.padding(18)
             Divider()
-            if store.docker.state != "ready" {
+            if requiresDocker && store.docker.state != "ready" {
                 HStack(spacing: 10) {
                     if store.docker.state == "checking" || store.docker.state == "building" { ProgressView().controlSize(.small) }
                     else { Image(systemName: store.docker.state == "missing" ? "shippingbox" : "exclamationmark.triangle.fill").foregroundStyle(.orange) }
@@ -711,7 +711,7 @@ struct ContentView: View {
                                         }
                                     } else { Task { await store.action(profile.connected ? "disconnect" : "connect", name: profile.name) } }
                                 }
-                                    .buttonStyle(.borderedProminent).tint(profile.connected ? .red : .green).disabled(!profile.connected && store.docker.state != "ready")
+                                    .buttonStyle(.borderedProminent).tint(profile.connected ? .red : .green).disabled(!profile.connected && profile.type != "openfortivpn" && store.docker.state != "ready")
                                 }
                             }
                             Label(profile.routes.isEmpty ? "No routes configured" : profile.routes, systemImage: "point.3.connected.trianglepath.dotted").font(.caption).foregroundStyle(.cyan)
@@ -747,15 +747,15 @@ struct ContentView: View {
                         }.padding(14).background(.thinMaterial, in: RoundedRectangle(cornerRadius: 14)).listRowInsets(EdgeInsets(top: 5, leading: 14, bottom: 5, trailing: 14)).listRowSeparator(.hidden).listRowBackground(Color.clear).swipeActions(edge: .trailing, allowsFullSwipe: false) { Button(role: .destructive) { deleting = profile } label: { Image(systemName: "trash.fill") }.tint(.red).accessibilityLabel("Delete") }
                 }
             }.listStyle(.plain).scrollContentBackground(.hidden).padding(.horizontal, 7).animation(.easeInOut(duration: 0.25), value: store.profiles.map(\.name))
-            Divider(); HStack { Circle().fill(store.docker.state == "ready" ? Color.green : Color.orange).frame(width: 7); Text(store.docker.state == "ready" ? "Docker ready" : "Docker unavailable").font(.caption).foregroundStyle(.secondary); Text("v\(updater.currentVersion)").font(.caption.monospacedDigit()).foregroundStyle(.tertiary).help("VPNToris version \(updater.currentVersion)"); Spacer(); Button("Touch ID") { showTouchIDHelp = true }.buttonStyle(.borderless); Button("Quit") { NSApplication.shared.terminate(nil) }.buttonStyle(.borderless) }.padding(12)
+            Divider(); HStack { Circle().fill(!requiresDocker || store.docker.state == "ready" ? Color.green : Color.orange).frame(width: 7); Text(requiresDocker ? (store.docker.state == "ready" ? "Docker ready" : "Docker unavailable") : "Native engine ready").font(.caption).foregroundStyle(.secondary); Text("v\(updater.currentVersion)").font(.caption.monospacedDigit()).foregroundStyle(.tertiary).help("VPNToris version \(updater.currentVersion)"); Spacer(); Button("Touch ID") { showTouchIDHelp = true }.buttonStyle(.borderless); Button("Quit") { NSApplication.shared.terminate(nil) }.buttonStyle(.borderless) }.padding(12)
         }.frame(width: 410, height: 560).task {
             store.migrateLegacyCredentials()
             discoveredProfiles = discoverInstalledProfiles()
             await store.refresh()
             await store.connectLaunchProfiles()
-            await store.refreshDocker(retry: true)
+            if requiresDocker { await store.refreshDocker(retry: true) }
             await updater.check(silent: true)
-            while store.docker.state == "checking" || store.docker.state == "building" {
+            while requiresDocker && (store.docker.state == "checking" || store.docker.state == "building") {
                 try? await Task.sleep(for: .seconds(2))
                 await store.refreshDocker()
             }
@@ -806,6 +806,8 @@ struct ContentView: View {
         default: return "Checking Docker"
         }
     }
+
+    private var requiresDocker: Bool { store.profiles.contains { $0.type != "openfortivpn" } }
 
     private func profileTypeName(_ type: String) -> String { switch type { case "openfortivpn": return "FortiGate SSL VPN"; case "ipsec": return "FortiGate IPsec"; case "openconnect": return "GlobalProtect / OpenConnect"; case "openvpn": return "OpenVPN"; default: return "VPN" } }
     private func profileTypeIcon(_ type: String) -> String { switch type { case "ipsec": return "lock.shield.fill"; case "openconnect": return "network.badge.shield.half.filled"; case "openvpn": return "point.3.connected.trianglepath.dotted"; default: return "shield.lefthalf.filled" } }

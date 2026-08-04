@@ -9,7 +9,7 @@
     <string>/Library/PrivilegedHelperTools/com.vpntoris.native-helper</string>
     <string>daemon</string>
     <string>501</string>
-    <string>/Library/Application Support/VPNToris/Engines/darwin-arm64</string>
+    <string>/Library/Application Support/VPNToris/Engines</string>
   </array>
   <key>RunAtLoad</key>
   <true/>

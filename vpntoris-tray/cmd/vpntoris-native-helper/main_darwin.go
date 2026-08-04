@@ -10,6 +10,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -58,6 +59,7 @@ func main() {
 	if err != nil {
 		fatal(err.Error())
 	}
+	engineRoot = filepath.Join(engineRoot, "darwin-"+runtime.GOARCH)
 	service := &server{engineRoot: engineRoot, userID: uid, sessions: make(map[string]*session)}
 	if err := service.serve(uid); err != nil {
 		fatal(err.Error())

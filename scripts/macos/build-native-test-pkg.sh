@@ -16,6 +16,7 @@ scripts_root=$(mktemp -d /tmp/vpntoris-native-pkg-scripts.XXXXXX)
 output_path=${1:-"$repo_root/.build/VPNToris-Native-Engine-2.0.0-test.pkg"}
 engine_root="$repo_root/.build/native-engines/darwin-arm64/openfortivpn"
 openvpn_root="$repo_root/.build/native-engines/darwin-arm64/openvpn"
+openvpn_intel_root="$repo_root/.build/native-engines/darwin-amd64/openvpn"
 
 if [[ ! -x "$engine_root/bin/openfortivpn" ]]; then
   "$repo_root/scripts/macos/build-openfortivpn.sh"
@@ -23,14 +24,21 @@ fi
 if [[ ! -x "$openvpn_root/bin/openvpn" ]]; then
   "$repo_root/scripts/macos/build-openvpn.sh"
 fi
+if [[ ! -x "$openvpn_intel_root/bin/openvpn" ]]; then
+  "$repo_root/scripts/macos/build-openvpn-intel.sh"
+fi
 mkdir -p "$stage_root/Library/PrivilegedHelperTools"
 mkdir -p "$stage_root/Library/LaunchDaemons"
 mkdir -p "$stage_root/Library/Application Support/VPNToris/Engines/darwin-arm64"
+mkdir -p "$stage_root/Library/Application Support/VPNToris/Engines/darwin-amd64"
 mkdir -p "$scripts_root"
 cd "$repo_root/vpntoris-tray"
-go build -trimpath -ldflags "-s -w" -o "$stage_root/Library/PrivilegedHelperTools/com.vpntoris.native-helper" ./cmd/vpntoris-native-helper
+GOARCH=arm64 go build -trimpath -ldflags "-s -w" -o "$scripts_root/helper-arm64" ./cmd/vpntoris-native-helper
+GOARCH=amd64 go build -trimpath -ldflags "-s -w" -o "$scripts_root/helper-amd64" ./cmd/vpntoris-native-helper
+lipo -create "$scripts_root/helper-arm64" "$scripts_root/helper-amd64" -output "$stage_root/Library/PrivilegedHelperTools/com.vpntoris.native-helper"
 cp -R "$engine_root" "$stage_root/Library/Application Support/VPNToris/Engines/darwin-arm64/openfortivpn"
 cp -R "$openvpn_root" "$stage_root/Library/Application Support/VPNToris/Engines/darwin-arm64/openvpn"
+cp -R "$openvpn_intel_root" "$stage_root/Library/Application Support/VPNToris/Engines/darwin-amd64/openvpn"
 cp "$repo_root/scripts/macos/native-helper.plist" "$stage_root/Library/LaunchDaemons/com.vpntoris.native-helper.plist"
 cp "$repo_root/scripts/macos/native-postinstall" "$scripts_root/postinstall"
 chmod 0755 "$stage_root/Library/PrivilegedHelperTools/com.vpntoris.native-helper" "$scripts_root/postinstall"
@@ -48,6 +56,10 @@ openvpn_crypto_sha256=$(shasum -a 256 "$packaged_openvpn/lib/libcrypto.3.dylib" 
 openvpn_lz4_sha256=$(shasum -a 256 "$packaged_openvpn/lib/liblz4.1.dylib" | awk '{print $1}')
 openvpn_lzo_sha256=$(shasum -a 256 "$packaged_openvpn/lib/liblzo2.2.dylib" | awk '{print $1}')
 jq -n --arg engine "$openvpn_sha256" --arg ssl "$openvpn_ssl_sha256" --arg crypto "$openvpn_crypto_sha256" --arg lz4 "$openvpn_lz4_sha256" --arg lzo "$openvpn_lzo_sha256" '{id:"openvpn",protocol:"openvpn",version:"2.7.5",os:"darwin",architecture:"arm64",executable:"openvpn/bin/openvpn",sha256:$engine,license:"GPL-2.0-only WITH OpenSSL-exception",capabilities:["tun","userpass","challenge","split-route"],files:{"openvpn/lib/libssl.3.dylib":$ssl,"openvpn/lib/libcrypto.3.dylib":$crypto,"openvpn/lib/liblz4.1.dylib":$lz4,"openvpn/lib/liblzo2.2.dylib":$lzo}}' > "$packaged_openvpn/manifest.json"
+packaged_openvpn_intel="$stage_root/Library/Application Support/VPNToris/Engines/darwin-amd64/openvpn"
+codesign --force --options runtime --timestamp --sign "$VPNTORIS_MACOS_APPLICATION_IDENTITY" "$packaged_openvpn_intel/bin/openvpn"
+openvpn_intel_sha256=$(shasum -a 256 "$packaged_openvpn_intel/bin/openvpn" | awk '{print $1}')
+jq -n --arg engine "$openvpn_intel_sha256" '{id:"openvpn",protocol:"openvpn",version:"2.7.5",os:"darwin",architecture:"amd64",executable:"openvpn/bin/openvpn",sha256:$engine,license:"GPL-2.0-only WITH OpenSSL-exception",capabilities:["tun","userpass","challenge","split-route"]}' > "$packaged_openvpn_intel/manifest.json"
 packaged_engine="$stage_root/Library/Application Support/VPNToris/Engines/darwin-arm64/openfortivpn"
 engine_sha256=$(shasum -a 256 "$packaged_engine/bin/openfortivpn" | awk '{print $1}')
 ssl_sha256=$(shasum -a 256 "$packaged_engine/lib/libssl.3.dylib" | awk '{print $1}')

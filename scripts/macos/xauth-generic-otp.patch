@@ -10,12 +10,27 @@
  
  typedef struct private_xauth_generic_t private_xauth_generic_t;
  
-@@ -88,6 +91,30 @@
+@@ -57,12 +60,14 @@
+ 	shared_key_t *shared;
+ 	cp_payload_t *cp;
+ 	chunk_t msg;
++	bool otp_challenge = FALSE;
+ 
+ 	enumerator = in->create_attribute_enumerator(in);
+ 	while (enumerator->enumerate(enumerator, &attr))
+ 	{
+ 		if (attr->get_type(attr) == XAUTH_MESSAGE)
+ 		{
++			otp_challenge = TRUE;
+ 			chunk_printable(attr->get_chunk(attr), &msg, '?');
+ 			DBG1(DBG_CFG, "XAuth message: %.*s", (int)msg.len, msg.ptr);
+ 			free(msg.ptr);
+@@ -88,6 +93,30 @@
  				type = SHARED_PIN;
  				/* FALL */
  			case XAUTH_USER_PASSWORD:
 +				/* The native helper creates this FIFO only for an OTP session. */
-+				if (access("/var/run/vpntoris-native/ipsec-otp", F_OK) == 0)
++				if (otp_challenge && access("/var/run/vpntoris-native/ipsec-otp", F_OK) == 0)
 +				{
 +					FILE *otp_file;
 +					char otp[128];
@@ -39,4 +54,5 @@
 +					break;
 +				}
  				shared = lib->credmgr->get_shared(lib->credmgr, type,
- 																				 this->peer, this->server);
+ 												  this->peer, this->server);
+ 				if (!shared)

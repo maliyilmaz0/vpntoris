@@ -889,7 +889,7 @@ struct ContentView: View {
         }
     }
 
-    private var requiresDocker: Bool { store.profiles.contains { $0.type != "openfortivpn" && $0.type != "openvpn" } }
+    private var requiresDocker: Bool { store.profiles.contains { $0.type != "openfortivpn" && $0.type != "openvpn" && $0.type != "openconnect" } }
 
     private func profileTypeName(_ type: String, protocol value: String = "") -> String { switch type { case "openfortivpn": return "FortiGate SSL VPN"; case "ipsec": return "FortiGate IPsec"; case "openconnect": return ["anyconnect": "Cisco AnyConnect", "gp": "Palo Alto GlobalProtect", "pulse": "Pulse / Ivanti", "nc": "Juniper Network Connect", "f5": "F5 BIG-IP", "fortinet": "Fortinet SSL VPN", "array": "Array Networks"][value] ?? "OpenConnect"; case "openvpn": return "OpenVPN"; default: return "VPN" } }
     private func profileTypeIcon(_ type: String) -> String { switch type { case "ipsec": return "lock.shield.fill"; case "openconnect": return "network.badge.shield.half.filled"; case "openvpn": return "point.3.connected.trianglepath.dotted"; default: return "shield.lefthalf.filled" } }

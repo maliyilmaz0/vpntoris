@@ -56,3 +56,14 @@ func TestOpenVPNStartRejectsExecutableConfiguration(t *testing.T) {
 		t.Fatal("accepted executable OpenVPN configuration")
 	}
 }
+
+func TestOpenConnectStartValidatesGatewayProtocol(t *testing.T) {
+	request := Request{Action: ActionStart, Profile: "test-profile", Protocol: ProtocolOpenConnect, GatewayProtocol: "gp", Host: "vpn.example.invalid", Port: 443, Username: "test-user", Password: "test-password", Routes: []string{"198.51.100.42/32"}}
+	if err := request.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	request.GatewayProtocol = "unsupported"
+	if err := request.Validate(); err == nil {
+		t.Fatal("accepted unsupported OpenConnect protocol")
+	}
+}

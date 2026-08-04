@@ -30,6 +30,7 @@ const runtimeDirectory = "/var/run/vpntoris-native"
 
 var pppReadyPattern = regexp.MustCompile(`(?m)Interface (ppp[0-9]+) is UP\.`)
 var utunReadyPattern = regexp.MustCompile(`(?m)Opened utun device (utun[0-9]+)`)
+var openConnectReadyPattern = regexp.MustCompile(`(?m)^VPNTORIS_INTERFACE=((?:utun|tun|ppp)[0-9]+)$`)
 
 type session struct {
 	request        fortihelper.Request
@@ -156,6 +157,8 @@ func (service *server) start(request fortihelper.Request) fortihelper.Response {
 	engineName := "openfortivpn"
 	if protocol == fortihelper.ProtocolOpenVPN {
 		engineName = "openvpn"
+	} else if protocol == fortihelper.ProtocolOpenConnect {
+		engineName = "openconnect"
 	}
 	manifestPath := filepath.Join(service.engineRoot, engineName, "manifest.json")
 	_, executable, err := nativeengine.LoadEngineManifest(service.engineRoot, manifestPath)
@@ -218,6 +221,23 @@ func (service *server) start(request fortihelper.Request) fortihelper.Response {
 			arguments = append(arguments, "--auth-user-pass")
 		}
 	}
+	if protocol == fortihelper.ProtocolOpenConnect {
+		scriptPath := filepath.Join(filepath.Dir(executable), "vpntoris-vpnc-script")
+		if info, statErr := os.Stat(scriptPath); statErr != nil || info.Mode()&0111 == 0 {
+			readInput.Close()
+			writeInput.Close()
+			logFile.Close()
+			return fortihelper.Response{State: "failed", Error: "OpenConnect interface helper is missing"}
+		}
+		arguments = []string{
+			"--protocol=" + request.GatewayProtocol,
+			"--user=" + request.Username,
+			"--passwd-on-stdin",
+			"--script=" + scriptPath,
+			"--timestamp",
+			"--server=" + "https://" + net.JoinHostPort(request.Host, strconv.Itoa(request.Port)),
+		}
+	}
 	command := exec.Command(executable, arguments...)
 	command.Stdin = readInput
 	command.Stdout = logFile
@@ -253,6 +273,9 @@ func (service *server) start(request fortihelper.Request) fortihelper.Response {
 		current.input.Close()
 		current.input = nil
 		go service.manageOpenVPN(current)
+	}
+	if protocol == fortihelper.ProtocolOpenConnect && request.TwoFactor {
+		current.state = "waiting-otp"
 	}
 	if request.OTP != "" {
 		if _, err := current.input.Write([]byte(request.OTP + "\n")); err != nil {
@@ -340,6 +363,7 @@ func (service *server) sendOTP(request fortihelper.Request) fortihelper.Response
 	if _, err := current.input.Write([]byte(request.OTP + "\n")); err != nil {
 		return fortihelper.Response{State: "failed", Error: "could not supply one-time password"}
 	}
+	current.state = "connecting"
 	return fortihelper.Response{State: current.state}
 }
 
@@ -444,6 +468,8 @@ func interfaceFromLog(path string, protocol string) string {
 	pattern := pppReadyPattern
 	if protocol == fortihelper.ProtocolOpenVPN {
 		pattern = utunReadyPattern
+	} else if protocol == fortihelper.ProtocolOpenConnect {
+		pattern = openConnectReadyPattern
 	}
 	matches := pattern.FindSubmatch(data)
 	if len(matches) != 2 {

@@ -971,6 +971,22 @@ func monitorTraffic() {
 				updateTrafficSnapshot(config.Name, received, sent, duration)
 				continue
 			}
+			if nativeFortiSupported(config) || nativeOpenConnectSupported(config) {
+				var received, sent uint64
+				var duration int64
+				var err error
+				if nativeOpenConnectSupported(config) {
+					received, sent, duration, err = nativeOpenConnectTraffic(config.Name)
+				} else {
+					received, sent, duration, err = nativeFortiTraffic(config.Name)
+				}
+				if err != nil {
+					continue
+				}
+				seen[config.Name] = true
+				updateTrafficSnapshot(config.Name, received, sent, duration)
+				continue
+			}
 			container := containerName(config.Name)
 			if !containerRunning(container) {
 				continue
@@ -1182,6 +1198,8 @@ func handleProfilesAPI(response http.ResponseWriter, _ *http.Request) {
 		otpRequests.RUnlock()
 		if nativeOpenVPNSupported(config) {
 			needsOTP = nativeOpenVPNNeedsOTP(config.Name)
+		} else if nativeOpenConnectSupported(config) {
+			needsOTP = nativeOpenConnectNeedsOTP(config.Name)
 		}
 		gateways := gatewayCandidates(config)
 		profiles = append(profiles, profileView{
@@ -1280,7 +1298,7 @@ func handleActionAPI(response http.ResponseWriter, request *http.Request) {
 		otpRequests.Unlock()
 		_ = setSystemRoutes(containerName(selected.Name), "", "", false)
 		setRouteStatus(selected.Name, "")
-		if nativeFortiSupported(*selected) || nativeOpenVPNSupported(*selected) {
+		if nativeFortiSupported(*selected) || nativeOpenVPNSupported(*selected) || nativeOpenConnectSupported(*selected) {
 			err = nativeFortiDisconnect(selected.Name)
 		} else {
 			err = disconnectVPN(containerName(selected.Name))
@@ -1289,7 +1307,7 @@ func handleActionAPI(response http.ResponseWriter, request *http.Request) {
 			recordHistory(selected.Name, "disconnected")
 		}
 	case "route":
-		if nativeFortiSupported(*selected) || nativeOpenVPNSupported(*selected) {
+		if nativeFortiSupported(*selected) || nativeOpenVPNSupported(*selected) || nativeOpenConnectSupported(*selected) {
 			if nativeFortiConnected(selected.Name) {
 				setRouteStatus(selected.Name, "ready")
 			} else {
@@ -1310,7 +1328,7 @@ func handleActionAPI(response http.ResponseWriter, request *http.Request) {
 		}
 	case "delete":
 		_ = setSystemRoutes(containerName(selected.Name), "", "", false)
-		if nativeFortiSupported(*selected) || nativeOpenVPNSupported(*selected) {
+		if nativeFortiSupported(*selected) || nativeOpenVPNSupported(*selected) || nativeOpenConnectSupported(*selected) {
 			_ = nativeFortiDisconnect(selected.Name)
 		} else {
 			_ = disconnectVPN(containerName(selected.Name))
@@ -1463,7 +1481,7 @@ func handleLogsAPI(response http.ResponseWriter, request *http.Request) {
 		http.Error(response, "profile not found", 404)
 		return
 	}
-	if nativeFortiSupported(*selected) || nativeOpenVPNSupported(*selected) {
+	if nativeFortiSupported(*selected) || nativeOpenVPNSupported(*selected) || nativeOpenConnectSupported(*selected) {
 		output, err := nativeFortiLogs(selected.Name)
 		if err != nil {
 			http.Error(response, err.Error(), 500)
@@ -1502,7 +1520,7 @@ func handleRoutesAPI(response http.ResponseWriter, _ *http.Request) {
 	proxyState.RUnlock()
 	if configs, err := loadConfigs(); err == nil {
 		for _, config := range configs {
-			if !nativeFortiSupported(config) && !nativeOpenVPNSupported(config) {
+			if !nativeFortiSupported(config) && !nativeOpenVPNSupported(config) && !nativeOpenConnectSupported(config) {
 				continue
 			}
 			interfaceName := nativeFortiInterface(config.Name)
@@ -1577,7 +1595,7 @@ func containerHealthy(name string) bool {
 }
 
 func profileConnected(config VPNConfig) bool {
-	if nativeFortiSupported(config) || nativeOpenVPNSupported(config) {
+	if nativeFortiSupported(config) || nativeOpenVPNSupported(config) || nativeOpenConnectSupported(config) {
 		return nativeFortiConnected(config.Name)
 	}
 	return containerHealthy(containerName(config.Name))
@@ -1743,6 +1761,16 @@ func connectVPNWithFailover(config VPNConfig, exhaustive bool) error {
 		setRouteStatus(config.Name, "ready")
 		return nil
 	}
+	if nativeOpenConnectSupported(config) {
+		setRouteStatus(config.Name, "adding")
+		err := nativeOpenConnectConnect(config)
+		if err != nil {
+			setRouteStatus(config.Name, "failed")
+			return err
+		}
+		setRouteStatus(config.Name, "ready")
+		return nil
+	}
 	gateways := orderedGateways(config)
 	if len(gateways) == 0 {
 		return fmt.Errorf("at least one VPN gateway is required")
@@ -1883,7 +1911,7 @@ func sendOTP(config VPNConfig, otp string) error {
 	if otp == "" || len(otp) > 32 {
 		return fmt.Errorf("invalid OTP code")
 	}
-	if nativeFortiSupported(config) || nativeOpenVPNSupported(config) {
+	if nativeFortiSupported(config) || nativeOpenVPNSupported(config) || nativeOpenConnectSupported(config) {
 		return nativeFortiOTP(config.Name, otp)
 	}
 	command := dockerCommand("exec", "-i", containerName(config.Name), "/bin/bash", "-c", "cat > /run/vpntoris/otp")

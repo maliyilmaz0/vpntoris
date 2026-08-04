@@ -33,6 +33,13 @@ func TestUTUNReadyPatternIdentifiesOwnedInterface(t *testing.T) {
 	}
 }
 
+func TestOpenConnectReadyPatternIdentifiesOwnedInterface(t *testing.T) {
+	matches := openConnectReadyPattern.FindSubmatch([]byte("VPNTORIS_INTERFACE=utun9\n"))
+	if len(matches) != 2 || string(matches[1]) != "utun9" {
+		t.Fatalf("unexpected match: %#v", matches)
+	}
+}
+
 func TestOpenVPNChallengeCredentials(t *testing.T) {
 	tests := []struct {
 		challenge string

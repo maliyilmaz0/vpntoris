@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -133,6 +134,37 @@ func nativeFortiLogs(name string) ([]byte, error) {
 		lines = lines[len(lines)-300:]
 	}
 	return []byte(strings.Join(lines, "\n")), nil
+}
+
+func nativeFortiTraffic(name string) (uint64, uint64, int64, error) {
+	status, err := nativeFortiStatus(name)
+	if err != nil {
+		return 0, 0, 0, err
+	}
+	if status.State != "connected" || status.Interface == "" {
+		return 0, 0, 0, fmt.Errorf("native VPN tunnel is not connected")
+	}
+	output, err := exec.Command("/usr/sbin/netstat", "-bI", status.Interface).Output()
+	if err != nil {
+		return 0, 0, 0, err
+	}
+	received, sent, err := parseInterfaceCounters(string(output), status.Interface)
+	return received, sent, status.Duration, err
+}
+
+func parseInterfaceCounters(output string, interfaceName string) (uint64, uint64, error) {
+	for _, line := range strings.Split(output, "\n") {
+		fields := strings.Fields(line)
+		if len(fields) < 9 || fields[0] != interfaceName || !strings.HasPrefix(fields[2], "<Link#") {
+			continue
+		}
+		received, receivedErr := strconv.ParseUint(fields[5], 10, 64)
+		sent, sentErr := strconv.ParseUint(fields[8], 10, 64)
+		if receivedErr == nil && sentErr == nil {
+			return received, sent, nil
+		}
+	}
+	return 0, 0, fmt.Errorf("interface counters are unavailable")
 }
 
 func nativeFortiRequest(request fortihelper.Request) (*fortihelper.Response, error) {

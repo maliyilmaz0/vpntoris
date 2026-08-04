@@ -239,7 +239,7 @@ func start(req request) error {
 	}
 	devicePath := filepath.Join(stateDir, req.Key+".device")
 	_ = os.Remove(devicePath)
-	cmd := exec.Command(tun2socks, "-device", "utun", "-proxy", fmt.Sprintf("socks5://127.0.0.1:%d", req.Port))
+	cmd := exec.Command(tun2socks, tun2SocksArguments("utun", req.Port)...)
 	cmd.Env = append(os.Environ(), "WG_TUN_NAME_FILE="+devicePath)
 	logPath := filepath.Join(stateDir, req.Key+".log")
 	logFile, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0644)
@@ -355,6 +355,10 @@ func deviceName(key string) string {
 	h := fnv.New32a()
 	_, _ = h.Write([]byte(key))
 	return fmt.Sprintf("utun%d", 200+h.Sum32()%40)
+}
+
+func tun2SocksArguments(device string, port int) []string {
+	return []string{"--device", device, "--proxy", fmt.Sprintf("socks5://127.0.0.1:%d", port)}
 }
 
 func fatal(message string) { fmt.Fprintln(os.Stderr, message); os.Exit(1) }

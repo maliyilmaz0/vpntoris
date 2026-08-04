@@ -37,3 +37,9 @@ FortiGate SSL, OpenVPN, OpenConnect/GlobalProtect and IPsec engines are invoked 
 Release installers contain the VPN engines and their runtime libraries. Installation and first launch do not download engines, package-manager dependencies or container images. Homebrew and compiler tools are release-build dependencies only. Distributed engine files are signed and checked against the bundled manifest before the privileged service starts them. Corresponding licenses and redistributable source archives are included with the engine payload.
 
 The macOS OpenVPN engine is packaged for both Apple Silicon and Intel. Apple Silicon uses the `darwin-arm64` payload. Intel uses a statically linked `darwin-amd64` payload containing OpenSSL LTS, LZO and LZ4. The privileged helper is a universal Mach-O binary and resolves the engine directory from its runtime architecture.
+
+## Current macOS connection flow
+
+FortiGate SSL and OpenVPN profiles run without Docker when the native helper is installed. The helper validates each OpenVPN profile again at its privilege boundary, rejects command-executing directives, disables configuration-supplied routes and DNS changes, and writes the sanitized configuration to a root-only temporary file. Usernames and passwords are sent through a pipe and never placed in process arguments or the configuration file.
+
+The helper identifies the exact `pppN` or `utunN` interface created by each supervised process. Profile CIDRs are added only after that process reports a completed tunnel, and disconnect or failure removes only the routes owned by that session. Separate sessions therefore retain separate interfaces when multiple VPNs are connected concurrently. OpenVPN profiles that require an interactive challenge remain on the native-engine roadmap; the current native flow supports certificate-only and ordinary username/password authentication.

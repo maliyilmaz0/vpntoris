@@ -42,3 +42,17 @@ func TestOTPRequestDoesNotAcceptLineInjection(t *testing.T) {
 		t.Fatal("accepted line injection")
 	}
 }
+
+func TestOpenVPNStartAcceptsSanitizedConfiguration(t *testing.T) {
+	request := Request{Action: ActionStart, Profile: "test-profile", Protocol: ProtocolOpenVPN, Configuration: "client\ndev tun\nremote vpn.example.invalid 1194\n", Username: "test-user", Password: "test-password", Routes: []string{"198.51.100.42/32"}}
+	if err := request.Validate(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestOpenVPNStartRejectsExecutableConfiguration(t *testing.T) {
+	request := Request{Action: ActionStart, Profile: "test-profile", Protocol: ProtocolOpenVPN, Configuration: "client\ndev tun\nremote vpn.example.invalid 1194\nup /tmp/script\n", Routes: []string{"198.51.100.42/32"}}
+	if err := request.Validate(); err == nil {
+		t.Fatal("accepted executable OpenVPN configuration")
+	}
+}

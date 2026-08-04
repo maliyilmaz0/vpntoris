@@ -19,12 +19,15 @@ import (
 
 	"vpntoris-tray/internal/fortihelper"
 	"vpntoris-tray/internal/nativeengine"
+	"vpntoris-tray/internal/openvpnconfig"
 )
 
 const socketPath = "/var/run/vpntoris-native/helper.sock"
 const logDirectory = "/var/log/vpntoris"
+const runtimeDirectory = "/var/run/vpntoris-native"
 
 var pppReadyPattern = regexp.MustCompile(`(?m)Interface (ppp[0-9]+) is UP\.`)
+var utunReadyPattern = regexp.MustCompile(`(?m)Opened utun device (utun[0-9]+)`)
 
 type session struct {
 	request       fortihelper.Request
@@ -35,6 +38,7 @@ type session struct {
 	interfaceName string
 	state         string
 	errorText     string
+	configPath    string
 }
 
 type server struct {
@@ -71,6 +75,9 @@ func (service *server) serve(uid int) error {
 		return err
 	}
 	if err := os.MkdirAll(logDirectory, 0751); err != nil {
+		return err
+	}
+	if err := os.MkdirAll(runtimeDirectory, 0700); err != nil {
 		return err
 	}
 	if err := os.Chmod(logDirectory, 0751); err != nil {
@@ -131,7 +138,15 @@ func (service *server) start(request fortihelper.Request) fortihelper.Response {
 	if current := service.sessions[request.Profile]; current != nil && current.state != "stopped" && current.state != "failed" {
 		return fortihelper.Response{State: current.state, Interface: current.interfaceName, Error: "profile is already running"}
 	}
-	manifestPath := filepath.Join(service.engineRoot, "openfortivpn", "manifest.json")
+	protocol := request.Protocol
+	if protocol == "" {
+		protocol = fortihelper.ProtocolFortiGateSSL
+	}
+	engineName := "openfortivpn"
+	if protocol == fortihelper.ProtocolOpenVPN {
+		engineName = "openvpn"
+	}
+	manifestPath := filepath.Join(service.engineRoot, engineName, "manifest.json")
 	_, executable, err := nativeengine.LoadEngineManifest(service.engineRoot, manifestPath)
 	if err != nil {
 		return fortihelper.Response{State: "failed", Error: err.Error()}
@@ -153,7 +168,45 @@ func (service *server) start(request fortihelper.Request) fortihelper.Response {
 		logFile.Close()
 		return fortihelper.Response{State: "failed", Error: err.Error()}
 	}
-	command := exec.Command(executable, request.Arguments()...)
+	arguments := request.Arguments()
+	configPath := ""
+	if protocol == fortihelper.ProtocolOpenVPN {
+		configuration, sanitizeErr := openvpnconfig.Sanitize(request.Configuration)
+		if sanitizeErr != nil {
+			readInput.Close()
+			writeInput.Close()
+			logFile.Close()
+			return fortihelper.Response{State: "failed", Error: sanitizeErr.Error()}
+		}
+		configFile, createErr := os.CreateTemp(runtimeDirectory, request.Profile+"-*.ovpn")
+		if createErr != nil {
+			readInput.Close()
+			writeInput.Close()
+			logFile.Close()
+			return fortihelper.Response{State: "failed", Error: createErr.Error()}
+		}
+		configPath = configFile.Name()
+		writeErr := configFile.Chmod(0600)
+		if writeErr == nil {
+			_, writeErr = configFile.Write([]byte(configuration))
+		}
+		closeErr := configFile.Close()
+		if writeErr == nil {
+			writeErr = closeErr
+		}
+		if writeErr != nil {
+			readInput.Close()
+			writeInput.Close()
+			logFile.Close()
+			_ = os.Remove(configPath)
+			return fortihelper.Response{State: "failed", Error: writeErr.Error()}
+		}
+		arguments = []string{"--config", configPath, "--dev", "tun", "--route-nopull", "--script-security", "1", "--auth-nocache", "--verb", "3"}
+		if request.Username != "" {
+			arguments = append(arguments, "--auth-user-pass", "/dev/stdin")
+		}
+	}
+	command := exec.Command(executable, arguments...)
 	command.Stdin = readInput
 	command.Stdout = logFile
 	command.Stderr = logFile
@@ -163,16 +216,30 @@ func (service *server) start(request fortihelper.Request) fortihelper.Response {
 		readInput.Close()
 		writeInput.Close()
 		logFile.Close()
+		if configPath != "" {
+			_ = os.Remove(configPath)
+		}
 		return fortihelper.Response{State: "failed", Error: err.Error()}
 	}
 	readInput.Close()
-	current := &session{request: request, command: command, input: writeInput, log: logFile, logPath: logPath, state: "connecting"}
+	current := &session{request: request, command: command, input: writeInput, log: logFile, logPath: logPath, configPath: configPath, state: "connecting"}
 	current.request.Password = ""
 	current.request.OTP = ""
+	current.request.Configuration = ""
 	service.sessions[request.Profile] = current
-	if _, err := current.input.Write([]byte(request.Password + "\n")); err != nil {
-		service.stopLocked(current)
-		return fortihelper.Response{State: "failed", Error: "could not supply VPN credential"}
+	credential := request.Password + "\n"
+	if protocol == fortihelper.ProtocolOpenVPN {
+		credential = request.Username + "\n" + request.Password + "\n"
+	}
+	if request.Password != "" {
+		if _, err := current.input.Write([]byte(credential)); err != nil {
+			service.stopLocked(current)
+			return fortihelper.Response{State: "failed", Error: "could not supply VPN credential"}
+		}
+	}
+	if protocol == fortihelper.ProtocolOpenVPN {
+		current.input.Close()
+		current.input = nil
 	}
 	if request.OTP != "" {
 		if _, err := current.input.Write([]byte(request.OTP + "\n")); err != nil {
@@ -203,8 +270,11 @@ func (service *server) monitor(current *session) {
 			go service.finish(current, <-wait)
 			return
 		case <-ticker.C:
-			interfaceName := interfaceFromLog(current.logPath)
+			interfaceName := interfaceFromLog(current.logPath, current.request.Protocol)
 			if interfaceName == "" {
+				continue
+			}
+			if current.request.Protocol == fortihelper.ProtocolOpenVPN && !logContains(current.logPath, "Initialization Sequence Completed") {
 				continue
 			}
 			if err := addRoutes(interfaceName, current.request.Routes); err != nil {
@@ -289,6 +359,10 @@ func (service *server) finish(current *session, waitError error) {
 		current.log.Close()
 		current.log = nil
 	}
+	if current.configPath != "" {
+		_ = os.Remove(current.configPath)
+		current.configPath = ""
+	}
 	if current.state == "stopped" {
 		return
 	}
@@ -308,12 +382,16 @@ func (service *server) fail(current *session, message string) {
 	current.state = "failed"
 }
 
-func interfaceFromLog(path string) string {
+func interfaceFromLog(path string, protocol string) string {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return ""
 	}
-	matches := pppReadyPattern.FindSubmatch(data)
+	pattern := pppReadyPattern
+	if protocol == fortihelper.ProtocolOpenVPN {
+		pattern = utunReadyPattern
+	}
+	matches := pattern.FindSubmatch(data)
 	if len(matches) != 2 {
 		return ""
 	}
@@ -323,6 +401,11 @@ func interfaceFromLog(path string) string {
 		return ""
 	}
 	return interfaceName
+}
+
+func logContains(path string, value string) bool {
+	data, err := os.ReadFile(path)
+	return err == nil && strings.Contains(string(data), value)
 }
 
 func addRoutes(interfaceName string, routes []string) error {

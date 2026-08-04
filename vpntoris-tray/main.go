@@ -1246,7 +1246,7 @@ func handleActionAPI(response http.ResponseWriter, request *http.Request) {
 		otpRequests.Unlock()
 		_ = setSystemRoutes(containerName(selected.Name), "", "", false)
 		setRouteStatus(selected.Name, "")
-		if nativeFortiSupported(*selected) {
+		if nativeFortiSupported(*selected) || nativeOpenVPNSupported(*selected) {
 			err = nativeFortiDisconnect(selected.Name)
 		} else {
 			err = disconnectVPN(containerName(selected.Name))
@@ -1255,7 +1255,7 @@ func handleActionAPI(response http.ResponseWriter, request *http.Request) {
 			recordHistory(selected.Name, "disconnected")
 		}
 	case "route":
-		if nativeFortiSupported(*selected) {
+		if nativeFortiSupported(*selected) || nativeOpenVPNSupported(*selected) {
 			if nativeFortiConnected(selected.Name) {
 				setRouteStatus(selected.Name, "ready")
 			} else {
@@ -1276,7 +1276,7 @@ func handleActionAPI(response http.ResponseWriter, request *http.Request) {
 		}
 	case "delete":
 		_ = setSystemRoutes(containerName(selected.Name), "", "", false)
-		if nativeFortiSupported(*selected) {
+		if nativeFortiSupported(*selected) || nativeOpenVPNSupported(*selected) {
 			_ = nativeFortiDisconnect(selected.Name)
 		} else {
 			_ = disconnectVPN(containerName(selected.Name))
@@ -1429,7 +1429,7 @@ func handleLogsAPI(response http.ResponseWriter, request *http.Request) {
 		http.Error(response, "profile not found", 404)
 		return
 	}
-	if nativeFortiSupported(*selected) {
+	if nativeFortiSupported(*selected) || nativeOpenVPNSupported(*selected) {
 		output, err := nativeFortiLogs(selected.Name)
 		if err != nil {
 			http.Error(response, err.Error(), 500)
@@ -1468,7 +1468,7 @@ func handleRoutesAPI(response http.ResponseWriter, _ *http.Request) {
 	proxyState.RUnlock()
 	if configs, err := loadConfigs(); err == nil {
 		for _, config := range configs {
-			if !nativeFortiSupported(config) {
+			if !nativeFortiSupported(config) && !nativeOpenVPNSupported(config) {
 				continue
 			}
 			interfaceName := nativeFortiInterface(config.Name)
@@ -1543,7 +1543,7 @@ func containerHealthy(name string) bool {
 }
 
 func profileConnected(config VPNConfig) bool {
-	if nativeFortiSupported(config) {
+	if nativeFortiSupported(config) || nativeOpenVPNSupported(config) {
 		return nativeFortiConnected(config.Name)
 	}
 	return containerHealthy(containerName(config.Name))
@@ -1692,6 +1692,16 @@ func connectVPNWithFailover(config VPNConfig, exhaustive bool) error {
 	if nativeFortiSupported(config) {
 		setRouteStatus(config.Name, "adding")
 		err := nativeFortiConnect(config)
+		if err != nil {
+			setRouteStatus(config.Name, "failed")
+			return err
+		}
+		setRouteStatus(config.Name, "ready")
+		return nil
+	}
+	if nativeOpenVPNSupported(config) {
+		setRouteStatus(config.Name, "adding")
+		err := nativeOpenVPNConnect(config)
 		if err != nil {
 			setRouteStatus(config.Name, "failed")
 			return err

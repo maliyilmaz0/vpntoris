@@ -24,3 +24,11 @@ func TestPPPReadyPatternRejectsUnrelatedText(t *testing.T) {
 		}
 	}
 }
+
+func TestUTUNReadyPatternIdentifiesOwnedInterface(t *testing.T) {
+	data := []byte("2026-08-04 Opened utun device utun12\n2026-08-04 Initialization Sequence Completed\n")
+	matches := utunReadyPattern.FindSubmatch(data)
+	if len(matches) != 2 || string(matches[1]) != "utun12" {
+		t.Fatalf("unexpected match: %#v", matches)
+	}
+}

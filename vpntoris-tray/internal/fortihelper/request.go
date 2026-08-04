@@ -6,13 +6,17 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+
+	"vpntoris-tray/internal/openvpnconfig"
 )
 
 const (
-	ActionStart  = "start"
-	ActionOTP    = "otp"
-	ActionStop   = "stop"
-	ActionStatus = "status"
+	ActionStart          = "start"
+	ActionOTP            = "otp"
+	ActionStop           = "stop"
+	ActionStatus         = "status"
+	ProtocolFortiGateSSL = "fortigate-ssl"
+	ProtocolOpenVPN      = "openvpn"
 )
 
 var profilePattern = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]{0,79}$`)
@@ -20,15 +24,17 @@ var hostnamePattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9.-]{0,252}$`)
 var digestPattern = regexp.MustCompile(`^[a-fA-F0-9]{64}$`)
 
 type Request struct {
-	Action      string   `json:"action"`
-	Profile     string   `json:"profile"`
-	Host        string   `json:"host,omitempty"`
-	Port        int      `json:"port,omitempty"`
-	Username    string   `json:"username,omitempty"`
-	Password    string   `json:"password,omitempty"`
-	OTP         string   `json:"otp,omitempty"`
-	TrustedCert string   `json:"trustedCert,omitempty"`
-	Routes      []string `json:"routes,omitempty"`
+	Action        string   `json:"action"`
+	Profile       string   `json:"profile"`
+	Protocol      string   `json:"protocol,omitempty"`
+	Configuration string   `json:"configuration,omitempty"`
+	Host          string   `json:"host,omitempty"`
+	Port          int      `json:"port,omitempty"`
+	Username      string   `json:"username,omitempty"`
+	Password      string   `json:"password,omitempty"`
+	OTP           string   `json:"otp,omitempty"`
+	TrustedCert   string   `json:"trustedCert,omitempty"`
+	Routes        []string `json:"routes,omitempty"`
 }
 
 type Response struct {
@@ -56,6 +62,16 @@ func (request Request) Validate() error {
 }
 
 func (request Request) validateStart() error {
+	if request.Protocol == "" || request.Protocol == ProtocolFortiGateSSL {
+		return request.validateFortiGateStart()
+	}
+	if request.Protocol == ProtocolOpenVPN {
+		return request.validateOpenVPNStart()
+	}
+	return fmt.Errorf("unsupported VPN protocol")
+}
+
+func (request Request) validateFortiGateStart() error {
 	if request.Host == "" || net.ParseIP(request.Host) == nil && !hostnamePattern.MatchString(request.Host) || strings.Contains(request.Host, "..") {
 		return fmt.Errorf("invalid VPN gateway")
 	}
@@ -74,6 +90,29 @@ func (request Request) validateStart() error {
 	if request.TrustedCert != "" && !digestPattern.MatchString(request.TrustedCert) {
 		return fmt.Errorf("invalid trusted certificate digest")
 	}
+	return request.validateRoutes()
+}
+
+func (request Request) validateOpenVPNStart() error {
+	if _, err := openvpnconfig.Sanitize(request.Configuration); err != nil {
+		return err
+	}
+	if request.Username != "" && (len(request.Username) > 256 || strings.ContainsAny(request.Username, "\r\n\x00")) {
+		return fmt.Errorf("invalid VPN username")
+	}
+	if request.Password != "" && (len(request.Password) > 4096 || strings.ContainsAny(request.Password, "\r\n\x00")) {
+		return fmt.Errorf("invalid VPN password")
+	}
+	if (request.Username == "") != (request.Password == "") {
+		return fmt.Errorf("OpenVPN username and password must be supplied together")
+	}
+	if request.OTP != "" {
+		return fmt.Errorf("OpenVPN start does not accept an inline one-time password")
+	}
+	return request.validateRoutes()
+}
+
+func (request Request) validateRoutes() error {
 	if len(request.Routes) == 0 || len(request.Routes) > 64 {
 		return fmt.Errorf("one to 64 routes are required")
 	}

@@ -123,9 +123,11 @@ mkdir -p "$source_build"
 tar -xf "$source_archive" -C "$source_build"
 source_tree="$source_build/strongswan-$version"
 patch -p1 -d "$source_tree" < "$repo_root/scripts/macos/xauth-generic-otp.patch"
+autoreconf_bin=$(command -v autoreconf || true)
+[[ -n "$autoreconf_bin" ]] || { echo "autoreconf is required to build the native XAuth plugin" >&2; exit 1; }
 (
   cd "$source_tree"
-  /opt/homebrew/bin/autoreconf -fi >/dev/null 2>&1
+  "$autoreconf_bin" -fi >/dev/null 2>&1
   GPERF=/nonexistent CFLAGS="-arch $output_arch" ./configure --disable-defaults --enable-xauth-generic >/dev/null
   make -C src/libcharon/plugins/xauth_generic -j2 >/dev/null
 )

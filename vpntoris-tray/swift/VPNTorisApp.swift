@@ -795,7 +795,7 @@ struct ContentView: View {
                                         }
                                     } else { Task { await store.action(profile.connected ? "disconnect" : "connect", name: profile.name) } }
                                 }
-                                    .buttonStyle(.borderedProminent).tint(profile.connected ? .red : .green).disabled(!profile.connected && profile.type != "openfortivpn" && store.docker.state != "ready")
+                                    .buttonStyle(.borderedProminent).tint(profile.connected ? .red : .green)
                                 }
                             }
                             Label(profile.routes.isEmpty ? "No routes configured" : profile.routes, systemImage: "point.3.connected.trianglepath.dotted").font(.caption).foregroundStyle(.cyan)
@@ -1329,7 +1329,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var statusItem: NSStatusItem!
     private let popover = NSPopover()
     private var contentController: NSViewController!
-    private var trafficTimer: Timer?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory)
@@ -1342,7 +1341,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
 
         popover.contentSize = NSSize(width: 410, height: 560)
-        popover.behavior = .applicationDefined
+        popover.behavior = .transient
         popover.animates = true
         contentController = NSHostingController(rootView: ContentView())
         popover.contentViewController = contentController
@@ -1361,23 +1360,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             button.target = self
             button.action = #selector(togglePopover(_:))
         }
-        trafficTimer = Timer.scheduledTimer(timeInterval: 2, target: self, selector: #selector(updateMenuTraffic), userInfo: nil, repeats: true)
         NSWorkspace.shared.notificationCenter.addObserver(self, selector: #selector(systemDidWake), name: NSWorkspace.didWakeNotification, object: nil)
-    }
-
-    @objc private func updateMenuTraffic() {
-        URLSession.shared.dataTask(with: URL(string: "http://127.0.0.1:17984/api/traffic")!) { [weak self] data, _, _ in
-            guard let data, let items = try? JSONDecoder().decode([TrafficStatus].self, from: data) else { return }
-            let down = items.reduce(0) { $0 + $1.receiveBps }
-            let up = items.reduce(0) { $0 + $1.sendBps }
-            DispatchQueue.main.async { self?.statusItem.button?.title = items.isEmpty ? "" : " ↓\(self?.compactRate(down) ?? "0") ↑\(self?.compactRate(up) ?? "0")" }
-        }.resume()
-    }
-
-    private func compactRate(_ value: Double) -> String {
-        if value >= 1_000_000 { return String(format: "%.1fM", value / 1_000_000) }
-        if value >= 1_000 { return String(format: "%.0fK", value / 1_000) }
-        return String(format: "%.0fB", value)
     }
 
     @objc private func systemDidWake() {
@@ -1398,7 +1381,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
-    func applicationWillTerminate(_ notification: Notification) { trafficTimer?.invalidate(); NSWorkspace.shared.notificationCenter.removeObserver(self); daemon?.terminate() }
+    func applicationWillTerminate(_ notification: Notification) { NSWorkspace.shared.notificationCenter.removeObserver(self); daemon?.terminate() }
 }
 
 @main struct VPNTorisApp: App {

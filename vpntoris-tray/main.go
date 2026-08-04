@@ -643,6 +643,9 @@ func handleDiagnosticsAPI(response http.ResponseWriter, _ *http.Request) {
 		for _, config := range configs {
 			output, _ := dockerCommand("logs", "--tail", "500", containerName(config.Name)).CombinedOutput()
 			writeDiagnosticFile(archive, "logs/"+safeFileName(config.Name)+".log", []byte(sanitizeDiagnosticText(string(output))))
+			if helperLog, err := os.ReadFile(filepath.Join("/var/run/vpntoris", containerName(config.Name)+".log")); err == nil {
+				writeDiagnosticFile(archive, "route-helper/"+safeFileName(config.Name)+".log", []byte(sanitizeDiagnosticText(string(helperLog))))
+			}
 		}
 	}
 	_ = archive.Close()

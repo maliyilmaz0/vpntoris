@@ -237,10 +237,17 @@ func start(req request) error {
 	if exe == installedHelper {
 		tun2socks = installedTun2Socks
 	}
-	device := deviceName(req.Key)
-	cmd := exec.Command(tun2socks, "-device", device, "-proxy", fmt.Sprintf("socks5://127.0.0.1:%d", req.Port))
-	logFile, err := os.OpenFile(filepath.Join(stateDir, req.Key+".log"), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0600)
+	devicePath := filepath.Join(stateDir, req.Key+".device")
+	_ = os.Remove(devicePath)
+	cmd := exec.Command(tun2socks, "-device", "utun", "-proxy", fmt.Sprintf("socks5://127.0.0.1:%d", req.Port))
+	cmd.Env = append(os.Environ(), "WG_TUN_NAME_FILE="+devicePath)
+	logPath := filepath.Join(stateDir, req.Key+".log")
+	logFile, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0644)
 	if err != nil {
+		return err
+	}
+	if err := logFile.Chmod(0644); err != nil {
+		logFile.Close()
 		return err
 	}
 	defer logFile.Close()
@@ -248,14 +255,35 @@ func start(req request) error {
 	if err := cmd.Start(); err != nil {
 		return err
 	}
+	processDone := make(chan error, 1)
+	go func() { processDone <- cmd.Wait() }()
 	if err := os.WriteFile(filepath.Join(stateDir, req.Key+".pid"), []byte(strconv.Itoa(cmd.Process.Pid)), 0600); err != nil {
 		return err
 	}
-	for tries := 0; tries < 30; tries++ {
-		if exec.Command("/sbin/ifconfig", device).Run() == nil {
-			break
+	device := ""
+	for tries := 0; tries < 50; tries++ {
+		select {
+		case processError := <-processDone:
+			logData, _ := os.ReadFile(logPath)
+			message := strings.TrimSpace(string(logData))
+			if message == "" {
+				message = fmt.Sprintf("tun2socks exited: %v", processError)
+			}
+			return fmt.Errorf("tun2socks could not create a macOS tunnel: %s", message)
+		default:
+		}
+		if data, readError := os.ReadFile(devicePath); readError == nil {
+			candidate := strings.TrimSpace(string(data))
+			if strings.HasPrefix(candidate, "utun") && exec.Command("/sbin/ifconfig", candidate).Run() == nil {
+				device = candidate
+				break
+			}
 		}
 		time.Sleep(100 * time.Millisecond)
+	}
+	if device == "" {
+		_ = cmd.Process.Kill()
+		return fmt.Errorf("tun2socks did not report the macOS tunnel interface")
 	}
 	if output, err := exec.Command("/sbin/ifconfig", device, "198.18.0.1", "198.18.0.1", "up").CombinedOutput(); err != nil {
 		return fmt.Errorf("configure %s: %s", device, strings.TrimSpace(string(output)))
@@ -282,6 +310,13 @@ func start(req request) error {
 
 func stop(req request) {
 	device := deviceName(req.Key)
+	devicePath := filepath.Join(stateDir, req.Key+".device")
+	if data, err := os.ReadFile(devicePath); err == nil {
+		candidate := strings.TrimSpace(string(data))
+		if strings.HasPrefix(candidate, "utun") {
+			device = candidate
+		}
+	}
 	for _, route := range req.Routes {
 		_ = exec.Command("/sbin/route", "-n", "delete", "-net", route, "-interface", device).Run()
 	}
@@ -292,6 +327,7 @@ func stop(req request) {
 		}
 	}
 	_ = os.Remove(pidPath)
+	_ = os.Remove(devicePath)
 	domainsPath := filepath.Join(stateDir, req.Key+".domains")
 	if data, err := os.ReadFile(domainsPath); err == nil {
 		for _, domain := range strings.Split(string(data), "\n") {

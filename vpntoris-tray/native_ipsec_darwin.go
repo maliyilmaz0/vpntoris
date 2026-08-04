@@ -12,6 +12,11 @@ func nativeIPSecSupported(config VPNConfig) bool {
 	return config.Type == "ipsec" && config.IPSec != nil && nativeHelperReady()
 }
 
+func nativeIPSecNeedsOTP(name string) bool {
+	status, err := nativeFortiStatus(name)
+	return err == nil && status.State == "waiting-otp"
+}
+
 func nativeIPSecConnect(config VPNConfig) error {
 	settings := config.IPSec
 	ikePRF := settings.IKEPRF

@@ -1201,6 +1201,8 @@ func handleProfilesAPI(response http.ResponseWriter, _ *http.Request) {
 			needsOTP = nativeOpenVPNNeedsOTP(config.Name)
 		} else if nativeOpenConnectSupported(config) {
 			needsOTP = nativeOpenConnectNeedsOTP(config.Name)
+		} else if nativeIPSecSupported(config) {
+			needsOTP = nativeIPSecNeedsOTP(config.Name)
 		}
 		gateways := gatewayCandidates(config)
 		profiles = append(profiles, profileView{

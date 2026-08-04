@@ -63,6 +63,7 @@ for library in "$strong_root/lib/ipsec/"*.dylib; do
   [[ -L "$library" ]] && continue
   cp "$library" "$output_root/lib/$(basename "$library")"
 done
+chmod -R u+rwX "$output_root"
 pending="$work_root/pending"
 find "$output_root/bin" "$output_root/lib" "$output_root/plugins" -type f > "$pending"
 processed_macho="$work_root/processed-macho"
@@ -113,6 +114,23 @@ cp /tmp/strongswan-$version.tar.bz2 "$source_archive" 2>/dev/null || curl -fsSL 
 actual_source=$(shasum -a 256 "$source_archive" | awk '{print $1}')
 [[ "$actual_source" == "$source_sha256" ]] || { echo "strongSwan source digest mismatch" >&2; exit 1; }
 tar -xOf "$source_archive" "strongswan-$version/COPYING" > "$output_root/licenses/strongswan.txt"
+
+# Rebuild xauth-generic from the pinned source with VPNToris' interactive
+# XAuth OTP transport. The Homebrew bottle contains the stock plugin, which
+# can only read a static credential and cannot pause for a 2FA code.
+source_build="$work_root/source-build"
+mkdir -p "$source_build"
+tar -xf "$source_archive" -C "$source_build"
+source_tree="$source_build/strongswan-$version"
+patch -p1 -d "$source_tree" < "$repo_root/scripts/macos/xauth-generic-otp.patch"
+(
+  cd "$source_tree"
+  /opt/homebrew/bin/autoreconf -fi >/dev/null 2>&1
+  GPERF=/nonexistent CFLAGS="-arch $output_arch" ./configure --disable-defaults --enable-xauth-generic >/dev/null
+  make -C src/libcharon/plugins/xauth_generic -j2 >/dev/null
+)
+cp "$source_tree/src/libcharon/plugins/xauth_generic/.libs/libstrongswan-xauth-generic.so" \
+  "$output_root/plugins/libstrongswan-xauth-generic.so"
 engine_sha256=$(shasum -a 256 "$output_root/bin/charon" | awk '{print $1}')
 files=$(find "$output_root/bin" "$output_root/lib" "$output_root/plugins" -type f ! -path '*/bin/charon' -print | sort | while IFS= read -r asset; do relative=${asset#"$output_root/"}; printf '%s\t%s\n' "strongswan/$relative" "$(shasum -a 256 "$asset" | awk '{print $1}')"; done | jq -Rn '[inputs | split("\t") | {(.[0]): .[1]}] | add // {}')
 jq -n --arg engine "$engine_sha256" --arg architecture "$architecture" --argjson files "$files" '{id:"strongswan",protocol:"ipsec",version:"6.0.7",os:"darwin",architecture:$architecture,executable:"strongswan/bin/charon",sha256:$engine,license:"GPL-2.0-or-later",capabilities:["ikev1","ikev2","xauth","eap","sha1","dh20","split-route"],files:$files}' > "$output_root/manifest.json"

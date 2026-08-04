@@ -42,6 +42,7 @@ type session struct {
 	state          string
 	errorText      string
 	configPath     string
+	otpPath        string
 	managementPath string
 	management     net.Conn
 	username       string
@@ -379,6 +380,22 @@ func (service *server) sendOTP(request fortihelper.Request) fortihelper.Response
 		current.state = "connecting"
 		return fortihelper.Response{State: current.state}
 	}
+	if current.request.Protocol == fortihelper.ProtocolIPSec {
+		if current.otpPath == "" {
+			return fortihelper.Response{State: "failed", Error: "IPsec is not waiting for an OTP"}
+		}
+		otpFile, err := os.OpenFile(current.otpPath, os.O_WRONLY, 0600)
+		if err != nil {
+			return fortihelper.Response{State: "failed", Error: "could not open the native IPsec OTP channel"}
+		}
+		_, writeErr := otpFile.WriteString(request.OTP + "\n")
+		_ = otpFile.Close()
+		if writeErr != nil {
+			return fortihelper.Response{State: "failed", Error: "could not submit the native IPsec OTP"}
+		}
+		current.state = "connecting"
+		return fortihelper.Response{State: current.state}
+	}
 	if current.input == nil {
 		return fortihelper.Response{State: "failed", Error: "profile is not waiting for authentication"}
 	}
@@ -420,6 +437,10 @@ func (service *server) stopLocked(current *session) {
 	if current.managementPath != "" {
 		_ = os.Remove(current.managementPath)
 	}
+	if current.otpPath != "" {
+		_ = os.Remove(current.otpPath)
+		current.otpPath = ""
+	}
 	if current.command != nil && current.command.Process != nil {
 		_ = syscall.Kill(-current.command.Process.Pid, syscall.SIGTERM)
 	}
@@ -427,9 +448,6 @@ func (service *server) stopLocked(current *session) {
 }
 
 func (service *server) startIPSecLocked(request fortihelper.Request) fortihelper.Response {
-	if request.TwoFactor {
-		return fortihelper.Response{State: "failed", Error: "native IPsec OTP requires the interactive XAuth plugin"}
-	}
 	if err := service.ensureIPSecDaemonLocked(); err != nil {
 		return fortihelper.Response{State: "failed", Error: err.Error()}
 	}
@@ -444,30 +462,59 @@ func (service *server) startIPSecLocked(request fortihelper.Request) fortihelper
 		return fortihelper.Response{State: "failed", Error: err.Error()}
 	}
 	_ = logFile.Chown(service.userID, -1)
+	otpPath := ""
+	if request.TwoFactor {
+		// The bundled xauth-generic plugin blocks on this FIFO while the UI
+		// collects the one-time password. It is removed with the session.
+		otpPath = filepath.Join(runtimeDirectory, "ipsec-otp")
+		_ = os.Remove(otpPath)
+		if err := syscall.Mkfifo(otpPath, 0600); err != nil {
+			logFile.Close()
+			_ = os.Remove(configPath)
+			service.stopIPSecDaemonIfIdleLocked()
+			return fortihelper.Response{State: "failed", Error: "could not create native IPsec OTP channel"}
+		}
+	}
 	load := service.ipsecCommandFor("--load-all", "--file", configPath, "--noprompt")
 	load.Stdout = logFile
 	load.Stderr = logFile
 	if err := load.Run(); err != nil {
 		logFile.Close()
 		_ = os.Remove(configPath)
+		_ = os.Remove(otpPath)
 		service.stopIPSecDaemonIfIdleLocked()
 		return fortihelper.Response{State: "failed", Error: "could not load native IPsec profile"}
 	}
-	initiate := service.ipsecCommandFor("--initiate", "--child", "net-"+request.Profile, "--timeout", "45", "--loglevel", "2")
-	initiate.Stdout = logFile
-	initiate.Stderr = logFile
-	if err := initiate.Run(); err != nil {
-		logFile.Close()
-		_ = os.Remove(configPath)
-		service.stopIPSecDaemonIfIdleLocked()
-		return fortihelper.Response{State: "failed", Error: "native IPsec negotiation failed"}
-	}
-	logFile.Close()
 	request.Password = ""
 	request.IPSec.PreSharedKey = ""
-	current := &session{request: request, logPath: logPath, configPath: configPath, state: "connected", startedAt: time.Now()}
+	state := "connecting"
+	if request.TwoFactor {
+		state = "waiting-otp"
+	}
+	current := &session{request: request, logPath: logPath, configPath: configPath, otpPath: otpPath, state: state, startedAt: time.Now()}
 	service.sessions[request.Profile] = current
-	return fortihelper.Response{State: "connected"}
+	initiate := service.ipsecCommandFor("--initiate", "--child", "net-"+request.Profile, "--timeout", "190", "--loglevel", "2")
+	initiate.Stdout = logFile
+	initiate.Stderr = logFile
+	go func() {
+		err := initiate.Run()
+		_ = logFile.Close()
+		service.mu.Lock()
+		defer service.mu.Unlock()
+		if current.state == "stopped" || current.state == "failed" {
+			return
+		}
+		if err != nil {
+			current.state = "failed"
+			current.errorText = "native IPsec negotiation failed"
+			_ = os.Remove(current.otpPath)
+			_ = os.Remove(current.configPath)
+			service.stopIPSecDaemonIfIdleLocked()
+			return
+		}
+		current.state = "connected"
+	}()
+	return fortihelper.Response{State: state}
 }
 
 func (service *server) ensureIPSecDaemonLocked() error {

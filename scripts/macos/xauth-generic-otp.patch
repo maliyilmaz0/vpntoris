@@ -1,0 +1,42 @@
+--- a/src/libcharon/plugins/xauth_generic/xauth_generic.c
++++ b/src/libcharon/plugins/xauth_generic/xauth_generic.c
+@@ -18,6 +18,9 @@
+ 
+ #include <daemon.h>
+ #include <library.h>
++#include <stdio.h>
++#include <string.h>
++#include <unistd.h>
+ 
+ typedef struct private_xauth_generic_t private_xauth_generic_t;
+ 
+@@ -88,6 +91,30 @@
+ 				type = SHARED_PIN;
+ 				/* FALL */
+ 			case XAUTH_USER_PASSWORD:
++				/* The native helper creates this FIFO only for an OTP session. */
++				if (access("/var/run/vpntoris-native/ipsec-otp", F_OK) == 0)
++				{
++					FILE *otp_file;
++					char otp[128];
++					size_t len;
++
++					DBG1(DBG_IKE, "waiting for VPNToris XAuth passcode");
++					otp_file = fopen("/var/run/vpntoris-native/ipsec-otp", "r");
++					if (!otp_file || !fgets(otp, sizeof(otp), otp_file))
++					{
++						if (otp_file) { fclose(otp_file); }
++						enumerator->destroy(enumerator);
++						cp->destroy(cp);
++						return FAILED;
++					}
++					fclose(otp_file);
++					len = strcspn(otp, "\r\n");
++					cp->add_attribute(cp, configuration_attribute_create_chunk(
++							PLV1_CONFIGURATION_ATTRIBUTE, XAUTH_USER_PASSWORD,
++							chunk_clone(chunk_create(otp, len))));
++					DBG1(DBG_IKE, "submitted VPNToris XAuth passcode");
++					break;
++				}
+ 				shared = lib->credmgr->get_shared(lib->credmgr, type,
+ 																				 this->peer, this->server);

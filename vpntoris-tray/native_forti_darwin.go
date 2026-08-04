@@ -95,6 +95,17 @@ func nativeFortiDisconnect(name string) error {
 	return nil
 }
 
+func nativeFortiReset() error {
+	response, err := nativeFortiRequest(fortihelper.Request{Action: fortihelper.ActionReset, Profile: "reset"})
+	if err != nil {
+		return err
+	}
+	if response.Error != "" {
+		return fmt.Errorf("%s", response.Error)
+	}
+	return nil
+}
+
 func nativeFortiOTP(name, otp string) error {
 	response, err := nativeFortiRequest(fortihelper.Request{Action: fortihelper.ActionOTP, Profile: nativeProfileID(name), OTP: strings.TrimSpace(otp)})
 	if err != nil {

@@ -147,6 +147,8 @@ func (service *server) handle(connection net.Conn) {
 		response = service.stop(request.Profile)
 	case fortihelper.ActionStatus:
 		response = service.status(request.Profile)
+	case fortihelper.ActionReset:
+		response = service.reset()
 	}
 	writeResponse(connection, response)
 }
@@ -415,6 +417,19 @@ func (service *server) stop(profile string) fortihelper.Response {
 		return fortihelper.Response{State: "stopped"}
 	}
 	service.stopLocked(current)
+	return fortihelper.Response{State: "stopped"}
+}
+
+func (service *server) reset() fortihelper.Response {
+	service.mu.Lock()
+	defer service.mu.Unlock()
+	for _, current := range service.sessions {
+		if current.state != "stopped" {
+			service.stopLocked(current)
+		}
+	}
+	service.sessions = make(map[string]*session)
+	service.stopIPSecDaemonIfIdleLocked()
 	return fortihelper.Response{State: "stopped"}
 }
 

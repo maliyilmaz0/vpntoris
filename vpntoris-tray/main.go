@@ -554,6 +554,7 @@ func startPACServer() error {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/api/profiles", handleProfilesAPI)
 	mux.HandleFunc("/api/action", handleActionAPI)
+	mux.HandleFunc("/api/reset", handleResetAPI)
 	mux.HandleFunc("/api/logs", handleLogsAPI)
 	mux.HandleFunc("/api/routes", handleRoutesAPI)
 	mux.HandleFunc("/api/docker", handleDockerAPI)
@@ -597,6 +598,52 @@ func startPACServer() error {
 	})
 	go func() { _ = http.Serve(listener, mux) }()
 	go monitorActiveProxy()
+	return nil
+}
+
+func handleResetAPI(response http.ResponseWriter, request *http.Request) {
+	response.Header().Set("Access-Control-Allow-Origin", "*")
+	if request.Method != http.MethodPost {
+		http.Error(response, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if err := resetAllConnections(); err != nil {
+		http.Error(response, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	response.WriteHeader(http.StatusNoContent)
+}
+
+func resetAllConnections() error {
+	configs, err := loadConfigs()
+	if err != nil {
+		return err
+	}
+	connectionIntent.Lock()
+	connectionIntent.names = make(map[string]bool)
+	connectionIntent.busy = make(map[string]bool)
+	connectionIntent.profiles = make(map[string]VPNConfig)
+	connectionIntent.Unlock()
+	otpRequests.Lock()
+	otpRequests.names = make(map[string]bool)
+	otpRequests.Unlock()
+
+	for _, config := range configs {
+		_ = setSystemRoutes(containerName(config.Name), "", "", false)
+		setRouteStatus(config.Name, "")
+	}
+	if nativeHelperReady() {
+		_ = nativeFortiReset()
+	}
+	for _, config := range configs {
+		if config.Type != "ipsec" && config.Type != "openfortivpn" && config.Type != "openvpn" && config.Type != "openconnect" {
+			_ = disconnectVPN(containerName(config.Name))
+		}
+	}
+	proxyState.Lock()
+	proxyState.mappings = make(map[string]proxyMapping)
+	proxyState.revision++
+	proxyState.Unlock()
 	return nil
 }
 

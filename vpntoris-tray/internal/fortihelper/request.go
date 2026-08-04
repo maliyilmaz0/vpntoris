@@ -15,6 +15,7 @@ const (
 	ActionOTP            = "otp"
 	ActionStop           = "stop"
 	ActionStatus         = "status"
+	ActionReset          = "reset"
 	ProtocolFortiGateSSL = "fortigate-ssl"
 	ProtocolOpenVPN      = "openvpn"
 	ProtocolOpenConnect  = "openconnect"
@@ -85,6 +86,8 @@ func (request Request) Validate() error {
 			return fmt.Errorf("invalid one-time password")
 		}
 	case ActionStop, ActionStatus:
+	case ActionReset:
+		return nil
 	default:
 		return fmt.Errorf("invalid action")
 	}

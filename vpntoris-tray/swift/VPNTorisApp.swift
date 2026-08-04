@@ -375,6 +375,18 @@ enum ProfileKeychain {
         } catch { self.error = error.localizedDescription }
     }
 
+    func resetConnections() async {
+        do {
+            var request = URLRequest(url: api.appending(path: "api/reset"))
+            request.httpMethod = "POST"
+            let (data, response) = try await URLSession.shared.data(for: request)
+            guard (response as? HTTPURLResponse)?.statusCode == 204 else {
+                throw NSError(domain: "VPNToris", code: 1, userInfo: [NSLocalizedDescriptionKey: String(data: data, encoding: .utf8) ?? "Reset failed"])
+            }
+            await refresh()
+        } catch { self.error = error.localizedDescription }
+    }
+
     func logs(for name: String) async throws -> String {
         var parts = URLComponents(url: api.appending(path: "api/logs"), resolvingAgainstBaseURL: false)!; parts.queryItems = [.init(name: "name", value: name)]
         let (data, response) = try await URLSession.shared.data(from: parts.url!); guard (response as? HTTPURLResponse)?.statusCode == 200 else { throw NSError(domain: "VPNToris", code: 1, userInfo: [NSLocalizedDescriptionKey: String(data: data, encoding: .utf8) ?? "Log unavailable"]) }; return String(data: data, encoding: .utf8) ?? ""
@@ -718,6 +730,7 @@ struct ContentView: View {
     @State private var showBackup = false
     @State private var showLanguage = false
     @State private var showHelp = false
+    @State private var showResetConfirmation = false
     @State private var importError = ""
     @State private var pendingOTP: Set<String> = []
     @State private var submittedOTP: Set<String> = []
@@ -744,6 +757,8 @@ struct ContentView: View {
                     Button("Backup and Restore…", systemImage: "lock.doc") { showBackup = true }
                     Button("Export Diagnostics…", systemImage: "wrench.and.screwdriver") { Task { await exportDiagnostics() } }
                     Button("Check for Updates…", systemImage: "arrow.triangle.2.circlepath") { showUpdates = true; Task { await updater.check() } }
+                    Divider()
+                    Button("Reset All Connections", systemImage: "arrow.counterclockwise", role: .destructive) { showResetConfirmation = true }
                 } label: { Image(systemName: "ellipsis.circle") }.menuStyle(.borderlessButton).frame(width: 34)
                 Button { oldName = nil; editing = VPNProfile() } label: { Image(systemName: "plus") }.buttonStyle(.bordered)
             }.padding(18)
@@ -870,6 +885,10 @@ struct ContentView: View {
         .fileImporter(isPresented: $showImporter, allowedContentTypes: [.data, .plainText], allowsMultipleSelection: false) { result in
             do { if let url = try result.get().first { oldName = nil; editing = try importedProfile(from: url) } } catch { importError = error.localizedDescription }
         }
+        .alert("Reset all connections?", isPresented: $showResetConfirmation) {
+            Button("Cancel", role: .cancel) {}
+            Button("Reset", role: .destructive) { Task { await store.resetConnections() } }
+        } message: { Text("All VPN tunnels, pending OTP prompts, routes and reconnect attempts will be stopped. Profiles will not be deleted.") }
         .alert("Import failed", isPresented: Binding(get: { !importError.isEmpty }, set: { if !$0 { importError = "" } })) { Button("OK") { importError = "" } } message: { Text(importError) }
         .alert("Delete \(deleting?.name ?? "profile")?", isPresented: Binding(get: { deleting != nil }, set: { if !$0 { deleting = nil } })) {
             Button("Cancel", role: .cancel) { deleting = nil }

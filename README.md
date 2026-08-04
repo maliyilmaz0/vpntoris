@@ -50,10 +50,11 @@ VPNToris checks Docker automatically when it opens. If Docker Desktop is missing
 
 ## Install
 
-1. Download the notarized DMG from [Releases](https://github.com/maliyilmaz0/vpntoris/releases).
-2. Drag `VPNToris.app` to `Applications`.
-3. Open VPNToris. It prepares the VPN image and attempts to install a `vpntorisctl` symlink under `/opt/homebrew/bin` or `/usr/local/bin`. Start Docker Desktop from the warning if it is not already running.
-4. Install the routing helper once from Terminal. This uses the normal `sudo`/Touch ID path and prevents recurring AppleScript password dialogs:
+1. Download and open the signed/notarized PKG from [Releases](https://github.com/maliyilmaz0/vpntoris/releases).
+2. Complete the standard macOS Installer flow. The package installs `VPNToris.app`, the privileged routing helper, its LaunchDaemon and the `vpntorisctl` command automatically.
+3. Open VPNToris. It prepares the VPN image automatically. Start Docker Desktop from the warning if it is not already running.
+
+The DMG remains available for manual installation. DMG users must install the routing helper once from Terminal:
 
 ```bash
 sudo "/Applications/VPNToris.app/Contents/MacOS/vpntoris-route-helper" install "$(id -u)"

@@ -9,7 +9,9 @@ BUILD_DIR="$ROOT_DIR/build/release"
 APP="$BUILD_DIR/$APP_NAME.app"
 DIST_DIR="$ROOT_DIR/dist"
 DMG="$DIST_DIR/$APP_NAME-$VERSION-$ARCH.dmg"
+PKG="$DIST_DIR/$APP_NAME-$VERSION-$ARCH.pkg"
 SIGN_IDENTITY=${SIGN_IDENTITY:-Developer ID Application: RAKORT BILGI VE ILETISIM TEKNOLOJILERI LIMITED SIRKETI (8Y8RYA7N3L)}
+INSTALLER_IDENTITY=${INSTALLER_IDENTITY:-Developer ID Installer: RAKORT BILGI VE ILETISIM TEKNOLOJILERI LIMITED SIRKETI (8Y8RYA7N3L)}
 NOTARY_PROFILE=${NOTARY_PROFILE:-FASTNAC_NOTARIZE}
 UNSIGNED=false
 
@@ -17,7 +19,7 @@ if [[ ${1:-} == "--unsigned" ]]; then
     UNSIGNED=true
 fi
 
-for command in go xcrun sips iconutil hdiutil lipo; do
+for command in go xcrun sips iconutil hdiutil lipo pkgbuild; do
     command -v "$command" >/dev/null || { echo "Missing prerequisite: $command" >&2; exit 1; }
 done
 
@@ -105,4 +107,21 @@ if [[ "$UNSIGNED" == false ]]; then
 fi
 
 shasum -a 256 "$DMG" > "$DMG.sha256"
+
+chmod 755 "$ROOT_DIR/scripts/pkg/preinstall" "$ROOT_DIR/scripts/pkg/postinstall"
+rm -f "$PKG"
+PKG_ARGUMENTS=(--component "$APP" --install-location /Applications --scripts "$ROOT_DIR/scripts/pkg" --identifier com.vpntoris.app --version "$VERSION")
+if [[ "$UNSIGNED" == false ]]; then
+    PKG_ARGUMENTS+=(--sign "$INSTALLER_IDENTITY")
+fi
+pkgbuild "${PKG_ARGUMENTS[@]}" "$PKG"
+
+if [[ "$UNSIGNED" == false ]]; then
+    xcrun notarytool submit "$PKG" --keychain-profile "$NOTARY_PROFILE" --wait
+    xcrun stapler staple "$PKG"
+    xcrun stapler validate "$PKG"
+fi
+
+shasum -a 256 "$PKG" > "$PKG.sha256"
 echo "Release ready: $DMG"
+echo "Installer ready: $PKG"

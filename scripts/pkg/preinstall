@@ -1,0 +1,7 @@
+#!/bin/bash
+set -e
+
+/usr/bin/pkill -x VPNToris 2>/dev/null || true
+/usr/bin/pkill -x vpntorisd 2>/dev/null || true
+
+exit 0

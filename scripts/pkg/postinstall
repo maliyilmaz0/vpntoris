@@ -1,0 +1,19 @@
+#!/bin/bash
+set -e
+
+APP=/Applications/VPNToris.app
+CONSOLE_USER=$(/usr/bin/stat -f %Su /dev/console)
+
+if [ "$CONSOLE_USER" = "root" ] || [ "$CONSOLE_USER" = "loginwindow" ] || [ -z "$CONSOLE_USER" ]; then
+    echo "No logged-in macOS user was found." >&2
+    exit 1
+fi
+
+CONSOLE_UID=$(/usr/bin/id -u "$CONSOLE_USER")
+"$APP/Contents/MacOS/vpntoris-route-helper" install "$CONSOLE_UID"
+
+/bin/mkdir -p /usr/local/bin /opt/homebrew/bin
+/bin/ln -sfn "$APP/Contents/MacOS/vpntorisctl" /usr/local/bin/vpntorisctl
+/bin/ln -sfn "$APP/Contents/MacOS/vpntorisctl" /opt/homebrew/bin/vpntorisctl
+
+exit 0

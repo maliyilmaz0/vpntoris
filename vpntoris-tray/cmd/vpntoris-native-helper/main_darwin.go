@@ -480,6 +480,25 @@ func (service *server) ensureIPSecDaemonLocked() error {
 		return err
 	}
 	enginePath := filepath.Dir(filepath.Dir(executable))
+	pluginRuntimePath := "/var/run/vpntoris-native/plugins"
+	if err := os.MkdirAll(pluginRuntimePath, 0700); err != nil {
+		return err
+	}
+	entries, err := os.ReadDir(filepath.Join(enginePath, "plugins"))
+	if err != nil {
+		return err
+	}
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+		source := filepath.Join(enginePath, "plugins", entry.Name())
+		target := filepath.Join(pluginRuntimePath, entry.Name())
+		_ = os.Remove(target)
+		if err := os.Symlink(source, target); err != nil {
+			return err
+		}
+	}
 	service.ipsecSocket = filepath.Join(runtimeDirectory, "charon.vici")
 	service.ipsecConfig = filepath.Join(runtimeDirectory, "strongswan.conf")
 	service.ipsecSwanctl = filepath.Join(enginePath, "bin", "swanctl")

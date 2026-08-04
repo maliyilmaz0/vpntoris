@@ -21,6 +21,7 @@ amd64)
   ;;
 esac
 output_root="$repo_root/.build/native-engines/darwin-$architecture/strongswan"
+runtime_plugin_path="/var/run/vpntoris-native/plugins"
 work_root=$(mktemp -d /tmp/vpntoris-strongswan.XXXXXX)
 trap 'rm -rf "$work_root"' EXIT
 [[ "$output_root" == "$repo_root/.build/native-engines/"* ]] || exit 1
@@ -102,6 +103,10 @@ for binary in "$output_root/bin/"* "$output_root/lib/"* "$output_root/plugins/"*
     install_name_tool -change "$dependency" "$prefix/$(basename "$dependency")" "$binary"
   done
 done
+plugin_path=$(strings "$output_root/lib/libstrongswan.0.dylib" | awk '/Cellar\/strongswan\/6\.0\.7\/lib\/ipsec\/plugins/ {print; exit}')
+[[ -n "$plugin_path" ]] || { echo "strongSwan plugin path was not found" >&2; exit 1; }
+[[ ${#runtime_plugin_path} -le ${#plugin_path} ]] || { echo "runtime plugin path is too long" >&2; exit 1; }
+PLUGIN_PATH="$plugin_path" RUNTIME_PLUGIN_PATH="$runtime_plugin_path" perl -0pi -e '$old=$ENV{"PLUGIN_PATH"}; $new=$ENV{"RUNTIME_PLUGIN_PATH"}; $new .= "\0" x (length($old)-length($new)); s/\Q$old\E/$new/g' "$output_root/lib/libstrongswan.0.dylib"
 file "$output_root/bin/charon" | grep -q "$output_arch" || { echo "Unexpected strongSwan architecture" >&2; exit 1; }
 source_archive="$output_root/sources/strongswan-$version.tar.bz2"
 cp /tmp/strongswan-$version.tar.bz2 "$source_archive" 2>/dev/null || curl -fsSL --retry 3 "https://download.strongswan.org/strongswan-$version.tar.bz2" -o "$source_archive"

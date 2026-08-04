@@ -39,3 +39,32 @@ func TestLoadEngineManifestVerifiesDigestAndPath(t *testing.T) {
 		t.Fatal("digest mismatch was accepted")
 	}
 }
+
+func TestLoadEngineManifestVerifiesAssets(t *testing.T) {
+	root := t.TempDir()
+	executable := filepath.Join(root, "engine")
+	asset := filepath.Join(root, "engine.library")
+	if err := os.WriteFile(executable, []byte("engine"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(asset, []byte("library"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	executableDigest, _ := fileSHA256(executable)
+	assetDigest, _ := fileSHA256(asset)
+	manifest := EngineManifest{ID: "openvpn", Protocol: "openvpn", Version: "test", OS: runtime.GOOS, Architecture: runtime.GOARCH, Executable: "engine", SHA256: executableDigest, License: "GPL-2.0", Files: map[string]string{"engine.library": assetDigest}}
+	data, _ := json.Marshal(manifest)
+	manifestPath := filepath.Join(root, "manifest.json")
+	if err := os.WriteFile(manifestPath, data, 0600); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := LoadEngineManifest(root, manifestPath); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(asset, []byte("tampered"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := LoadEngineManifest(root, manifestPath); err == nil {
+		t.Fatal("tampered asset was accepted")
+	}
+}

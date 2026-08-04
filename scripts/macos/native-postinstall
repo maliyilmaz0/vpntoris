@@ -1,0 +1,14 @@
+#!/bin/zsh
+
+set -euo pipefail
+
+label=com.vpntoris.native-helper
+plist=/Library/LaunchDaemons/com.vpntoris.native-helper.plist
+console_uid=$(stat -f %u /dev/console)
+/usr/libexec/PlistBuddy -c "Set :ProgramArguments:2 $console_uid" "$plist"
+chown root:wheel "$plist" /Library/PrivilegedHelperTools/com.vpntoris.native-helper
+chmod 0644 "$plist"
+chmod 0755 /Library/PrivilegedHelperTools/com.vpntoris.native-helper
+/bin/launchctl bootout "system/$label" >/dev/null 2>&1 || true
+/bin/launchctl bootstrap system "$plist"
+/bin/launchctl enable "system/$label"

@@ -1,0 +1,104 @@
+package fortihelper
+
+import (
+	"fmt"
+	"net"
+	"regexp"
+	"strconv"
+	"strings"
+)
+
+const (
+	ActionStart  = "start"
+	ActionOTP    = "otp"
+	ActionStop   = "stop"
+	ActionStatus = "status"
+)
+
+var profilePattern = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]{0,79}$`)
+var hostnamePattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9.-]{0,252}$`)
+var digestPattern = regexp.MustCompile(`^[a-fA-F0-9]{64}$`)
+
+type Request struct {
+	Action      string   `json:"action"`
+	Profile     string   `json:"profile"`
+	Host        string   `json:"host,omitempty"`
+	Port        int      `json:"port,omitempty"`
+	Username    string   `json:"username,omitempty"`
+	Password    string   `json:"password,omitempty"`
+	OTP         string   `json:"otp,omitempty"`
+	TrustedCert string   `json:"trustedCert,omitempty"`
+	Routes      []string `json:"routes,omitempty"`
+}
+
+type Response struct {
+	State     string `json:"state"`
+	Interface string `json:"interface,omitempty"`
+	Error     string `json:"error,omitempty"`
+}
+
+func (request Request) Validate() error {
+	if !profilePattern.MatchString(request.Profile) {
+		return fmt.Errorf("invalid profile identifier")
+	}
+	switch request.Action {
+	case ActionStart:
+		return request.validateStart()
+	case ActionOTP:
+		if request.OTP == "" || len(request.OTP) > 128 || strings.ContainsAny(request.OTP, "\r\n\x00") {
+			return fmt.Errorf("invalid one-time password")
+		}
+	case ActionStop, ActionStatus:
+	default:
+		return fmt.Errorf("invalid action")
+	}
+	return nil
+}
+
+func (request Request) validateStart() error {
+	if request.Host == "" || net.ParseIP(request.Host) == nil && !hostnamePattern.MatchString(request.Host) || strings.Contains(request.Host, "..") {
+		return fmt.Errorf("invalid VPN gateway")
+	}
+	if request.Port < 1 || request.Port > 65535 {
+		return fmt.Errorf("invalid VPN port")
+	}
+	if request.Username == "" || len(request.Username) > 256 || strings.ContainsAny(request.Username, "\r\n\x00") {
+		return fmt.Errorf("invalid VPN username")
+	}
+	if request.Password == "" || len(request.Password) > 4096 || strings.ContainsAny(request.Password, "\r\n\x00") {
+		return fmt.Errorf("invalid VPN password")
+	}
+	if request.OTP != "" && (len(request.OTP) > 128 || strings.ContainsAny(request.OTP, "\r\n\x00")) {
+		return fmt.Errorf("invalid one-time password")
+	}
+	if request.TrustedCert != "" && !digestPattern.MatchString(request.TrustedCert) {
+		return fmt.Errorf("invalid trusted certificate digest")
+	}
+	if len(request.Routes) == 0 || len(request.Routes) > 64 {
+		return fmt.Errorf("one to 64 routes are required")
+	}
+	seen := make(map[string]bool, len(request.Routes))
+	for _, value := range request.Routes {
+		ip, network, err := net.ParseCIDR(value)
+		if err != nil || ip.To4() == nil || network.String() == "0.0.0.0/0" || network.String() != value || seen[value] {
+			return fmt.Errorf("invalid or duplicate IPv4 route: %s", value)
+		}
+		seen[value] = true
+	}
+	return nil
+}
+
+func (request Request) Arguments() []string {
+	arguments := []string{
+		net.JoinHostPort(request.Host, strconv.Itoa(request.Port)),
+		"--username=" + request.Username,
+		"--no-routes",
+		"--no-dns",
+		"--pppd-no-peerdns",
+		"--pppd-ipparam=vpntoris-" + request.Profile,
+	}
+	if request.TrustedCert != "" {
+		arguments = append(arguments, "--trusted-cert="+strings.ToLower(request.TrustedCert))
+	}
+	return arguments
+}

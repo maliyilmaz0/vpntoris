@@ -1,16 +1,51 @@
 param(
     [Parameter(Mandatory = $true)]
     [string[]]$InputPath,
-    [string]$CertificateThumbprint = $env:WINDOWS_SIGNING_CERT_THUMBPRINT,
+    [string]$CertificateThumbprint,
     [ValidateSet("CurrentUser", "LocalMachine")]
-    [string]$CertificateStoreLocation = "CurrentUser",
-    [string]$TimestampUrl = $env:WINDOWS_TIMESTAMP_URL
+    [string]$CertificateStoreLocation,
+    [string]$TimestampUrl
 )
 
 $ErrorActionPreference = "Stop"
+$repoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..\..")).Path
+$envPath = Join-Path $repoRoot ".env"
+if (Test-Path $envPath) {
+    foreach ($line in Get-Content $envPath) {
+        $trimmed = $line.Trim()
+        if ($trimmed.Length -eq 0 -or $trimmed.StartsWith("#") -or -not $trimmed.Contains("=")) {
+            continue
+        }
+        $parts = $trimmed.Split("=", 2)
+        $value = $parts[1].Trim() -replace '^(?:"(.*)"|''(.*)'')$', '$1$2'
+        if ([string]::IsNullOrEmpty([Environment]::GetEnvironmentVariable($parts[0]))) {
+            [Environment]::SetEnvironmentVariable($parts[0], $value)
+        }
+    }
+}
 
 if ([string]::IsNullOrWhiteSpace($CertificateThumbprint)) {
-    throw "WINDOWS_SIGNING_CERT_THUMBPRINT is required."
+    $CertificateThumbprint = $env:VPNTORIS_WINDOWS_CERT_THUMBPRINT
+}
+
+if ([string]::IsNullOrWhiteSpace($CertificateStoreLocation)) {
+    $CertificateStoreLocation = $env:VPNTORIS_WINDOWS_CERT_STORE_LOCATION
+}
+
+if ([string]::IsNullOrWhiteSpace($CertificateStoreLocation)) {
+    $CertificateStoreLocation = "CurrentUser"
+}
+
+if ($CertificateStoreLocation -notin @("CurrentUser", "LocalMachine")) {
+    throw "VPNTORIS_WINDOWS_CERT_STORE_LOCATION must be CurrentUser or LocalMachine."
+}
+
+if ([string]::IsNullOrWhiteSpace($TimestampUrl)) {
+    $TimestampUrl = $env:VPNTORIS_WINDOWS_TIMESTAMP_URL
+}
+
+if ([string]::IsNullOrWhiteSpace($CertificateThumbprint)) {
+    throw "VPNTORIS_WINDOWS_CERT_THUMBPRINT is required."
 }
 
 if ([string]::IsNullOrWhiteSpace($TimestampUrl)) {

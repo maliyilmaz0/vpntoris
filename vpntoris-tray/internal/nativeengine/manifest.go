@@ -13,15 +13,16 @@ import (
 )
 
 type EngineManifest struct {
-	ID           string   `json:"id"`
-	Protocol     string   `json:"protocol"`
-	Version      string   `json:"version"`
-	OS           string   `json:"os"`
-	Architecture string   `json:"architecture"`
-	Executable   string   `json:"executable"`
-	SHA256       string   `json:"sha256"`
-	License      string   `json:"license"`
-	Capabilities []string `json:"capabilities"`
+	ID           string            `json:"id"`
+	Protocol     string            `json:"protocol"`
+	Version      string            `json:"version"`
+	OS           string            `json:"os"`
+	Architecture string            `json:"architecture"`
+	Executable   string            `json:"executable"`
+	SHA256       string            `json:"sha256"`
+	License      string            `json:"license"`
+	Capabilities []string          `json:"capabilities"`
+	Files        map[string]string `json:"files,omitempty"`
 }
 
 func LoadEngineManifest(root, manifestPath string) (*EngineManifest, string, error) {
@@ -60,7 +61,38 @@ func LoadEngineManifest(root, manifestPath string) (*EngineManifest, string, err
 	if !strings.EqualFold(digest, manifest.SHA256) {
 		return nil, "", fmt.Errorf("engine digest mismatch")
 	}
+	for relativePath, expectedDigest := range manifest.Files {
+		if len(expectedDigest) != 64 {
+			return nil, "", fmt.Errorf("invalid engine asset digest")
+		}
+		assetPath, err := resolveBundleFile(rootPath, relativePath)
+		if err != nil {
+			return nil, "", err
+		}
+		assetDigest, err := fileSHA256(assetPath)
+		if err != nil {
+			return nil, "", err
+		}
+		if !strings.EqualFold(assetDigest, expectedDigest) {
+			return nil, "", fmt.Errorf("engine asset digest mismatch: %s", relativePath)
+		}
+	}
 	return &manifest, resolvedExecutable, nil
+}
+
+func resolveBundleFile(root, relativePath string) (string, error) {
+	if relativePath == "" || filepath.IsAbs(relativePath) {
+		return "", fmt.Errorf("invalid engine asset path")
+	}
+	path, err := filepath.EvalSymlinks(filepath.Join(root, filepath.Clean(relativePath)))
+	if err != nil {
+		return "", err
+	}
+	relative, err := filepath.Rel(root, path)
+	if err != nil || relative == ".." || strings.HasPrefix(relative, ".."+string(os.PathSeparator)) {
+		return "", fmt.Errorf("engine asset escapes bundle root")
+	}
+	return path, nil
 }
 
 func fileSHA256(path string) (string, error) {

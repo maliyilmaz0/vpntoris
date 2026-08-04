@@ -33,3 +33,5 @@ The privileged Windows service uses bundled Wintun and IP Helper APIs. Credentia
 ## Engine packaging
 
 FortiGate SSL, OpenVPN, OpenConnect/GlobalProtect and IPsec engines are invoked through a common supervisor. Initial releases bundle audited platform-specific engine binaries and libraries. They are not host prerequisites and are never resolved through PATH. Each engine manifest contains its protocol, supported architectures, digest, license and capability flags.
+
+Release installers contain the VPN engines and their runtime libraries. Installation and first launch do not download engines, package-manager dependencies or container images. Homebrew and compiler tools are release-build dependencies only. Distributed engine files are signed and checked against the bundled manifest before the privileged service starts them. Corresponding licenses and redistributable source archives are included with the engine payload.

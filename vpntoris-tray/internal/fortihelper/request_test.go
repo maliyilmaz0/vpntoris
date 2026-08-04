@@ -1,0 +1,44 @@
+package fortihelper
+
+import "testing"
+
+func TestStartRequestIsStrictlyScoped(t *testing.T) {
+	request := Request{Action: ActionStart, Profile: "test-profile", Host: "vpn.example.invalid", Port: 443, Username: "test-user", Password: "test-password", Routes: []string{"198.51.100.42/32"}}
+	if err := request.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	expected := []string{"vpn.example.invalid:443", "--username=test-user", "--no-routes", "--no-dns", "--pppd-no-peerdns", "--pppd-ipparam=vpntoris-test-profile"}
+	arguments := request.Arguments()
+	if len(arguments) != len(expected) {
+		t.Fatalf("arguments = %#v", arguments)
+	}
+	for index := range expected {
+		if arguments[index] != expected[index] {
+			t.Fatalf("argument %d = %q", index, arguments[index])
+		}
+	}
+}
+
+func TestStartRequestRejectsUnsafeValues(t *testing.T) {
+	tests := []Request{
+		{Action: ActionStart, Profile: "Invalid Profile", Host: "vpn.example.invalid", Port: 443, Username: "test-user", Password: "test-password", Routes: []string{"198.51.100.42/32"}},
+		{Action: ActionStart, Profile: "test-profile", Host: "vpn.example.invalid;id", Port: 443, Username: "test-user", Password: "test-password", Routes: []string{"198.51.100.42/32"}},
+		{Action: ActionStart, Profile: "test-profile", Host: "vpn.example.invalid", Port: 443, Username: "test-user", Password: "test-password", Routes: []string{"0.0.0.0/0"}},
+		{Action: ActionStart, Profile: "test-profile", Host: "vpn.example.invalid", Port: 443, Username: "test-user", Password: "test-password", Routes: []string{"198.51.100.7/24"}},
+		{Action: ActionStart, Profile: "test-profile", Host: "vpn.example.invalid", Port: 443, Username: "test-user\nroot", Password: "test-password", Routes: []string{"198.51.100.42/32"}},
+	}
+	for _, request := range tests {
+		if err := request.Validate(); err == nil {
+			t.Fatalf("accepted unsafe request: %#v", request)
+		}
+	}
+}
+
+func TestOTPRequestDoesNotAcceptLineInjection(t *testing.T) {
+	if err := (Request{Action: ActionOTP, Profile: "test-profile", OTP: "123456"}).Validate(); err != nil {
+		t.Fatal(err)
+	}
+	if err := (Request{Action: ActionOTP, Profile: "test-profile", OTP: "123456\nsecret"}).Validate(); err == nil {
+		t.Fatal("accepted line injection")
+	}
+}

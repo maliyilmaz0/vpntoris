@@ -24,6 +24,7 @@ struct VPNProfile: Codable, Identifiable, Hashable {
     var dnsServers: String?
     var config = ""
     var openConnectProtocol: String?
+    var externalBrowser: Bool?
     var ipsec: IPSecSettings?
 }
 
@@ -568,6 +569,7 @@ struct ProfileEditor: View {
                     Text("Fortinet SSL VPN").tag("fortinet")
                     Text("Array Networks").tag("array")
                 }
+                Toggle("Use browser-based SAML / SSO authentication", isOn: Binding(get: { profile.externalBrowser ?? false }, set: { profile.externalBrowser = $0 }))
             }
             HStack { TextField("Host", text: $profile.host); TextField("Port", text: $profile.port).frame(width: 80) }
             TextField("Backup gateways, one per line", text: Binding(get: { profile.backupGateways ?? "" }, set: { profile.backupGateways = $0 }), axis: .vertical).lineLimit(2...4)

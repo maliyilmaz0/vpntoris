@@ -67,3 +67,10 @@ func TestOpenConnectStartValidatesGatewayProtocol(t *testing.T) {
 		t.Fatal("accepted unsupported OpenConnect protocol")
 	}
 }
+
+func TestOpenConnectBrowserAuthenticationDoesNotRequireStoredCredentials(t *testing.T) {
+	request := Request{Action: ActionStart, Profile: "test-profile", Protocol: ProtocolOpenConnect, GatewayProtocol: "gp", ExternalBrowser: true, Host: "vpn.example.invalid", Port: 443, Routes: []string{"198.51.100.42/32"}}
+	if err := request.Validate(); err != nil {
+		t.Fatal(err)
+	}
+}

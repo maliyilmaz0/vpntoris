@@ -36,6 +36,7 @@ type Request struct {
 	OTP             string   `json:"otp,omitempty"`
 	TwoFactor       bool     `json:"twoFactor,omitempty"`
 	GatewayProtocol string   `json:"gatewayProtocol,omitempty"`
+	ExternalBrowser bool     `json:"externalBrowser,omitempty"`
 	TrustedCert     string   `json:"trustedCert,omitempty"`
 	Routes          []string `json:"routes,omitempty"`
 }
@@ -91,10 +92,10 @@ func (request Request) validateOpenConnectStart() error {
 	if !allowed[request.GatewayProtocol] {
 		return fmt.Errorf("unsupported OpenConnect gateway protocol")
 	}
-	if request.Username == "" || len(request.Username) > 256 || strings.ContainsAny(request.Username, "\r\n\x00") {
+	if (!request.ExternalBrowser && request.Username == "") || len(request.Username) > 256 || strings.ContainsAny(request.Username, "\r\n\x00") {
 		return fmt.Errorf("invalid VPN username")
 	}
-	if request.Password == "" || len(request.Password) > 4096 || strings.ContainsAny(request.Password, "\r\n\x00") {
+	if (!request.ExternalBrowser && request.Password == "") || len(request.Password) > 4096 || strings.ContainsAny(request.Password, "\r\n\x00") {
 		return fmt.Errorf("invalid VPN password")
 	}
 	return request.validateRoutes()

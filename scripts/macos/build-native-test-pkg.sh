@@ -45,6 +45,8 @@ GOARCH=arm64 go build -trimpath -ldflags "-s -w" -o "$scripts_root/helper-arm64"
 GOARCH=amd64 go build -trimpath -ldflags "-s -w" -o "$scripts_root/helper-amd64" ./cmd/vpntoris-native-helper
 GOARCH=arm64 go build -trimpath -ldflags "-s -w" -o "$scripts_root/vpnc-script-arm64" ./cmd/vpntoris-vpnc-script
 GOARCH=amd64 go build -trimpath -ldflags "-s -w" -o "$scripts_root/vpnc-script-amd64" ./cmd/vpntoris-vpnc-script
+GOARCH=arm64 go build -trimpath -ldflags "-s -w" -o "$scripts_root/browser-open-arm64" ./cmd/vpntoris-browser-open
+GOARCH=amd64 go build -trimpath -ldflags "-s -w" -o "$scripts_root/browser-open-amd64" ./cmd/vpntoris-browser-open
 lipo -create "$scripts_root/helper-arm64" "$scripts_root/helper-amd64" -output "$stage_root/Library/PrivilegedHelperTools/com.vpntoris.native-helper"
 cp -R "$engine_root" "$stage_root/Library/Application Support/VPNToris/Engines/darwin-arm64/openfortivpn"
 cp -R "$openvpn_root" "$stage_root/Library/Application Support/VPNToris/Engines/darwin-arm64/openvpn"
@@ -53,6 +55,8 @@ cp -R "$openconnect_root" "$stage_root/Library/Application Support/VPNToris/Engi
 cp -R "$openconnect_intel_root" "$stage_root/Library/Application Support/VPNToris/Engines/darwin-amd64/openconnect"
 cp "$scripts_root/vpnc-script-arm64" "$stage_root/Library/Application Support/VPNToris/Engines/darwin-arm64/openconnect/bin/vpntoris-vpnc-script"
 cp "$scripts_root/vpnc-script-amd64" "$stage_root/Library/Application Support/VPNToris/Engines/darwin-amd64/openconnect/bin/vpntoris-vpnc-script"
+cp "$scripts_root/browser-open-arm64" "$stage_root/Library/Application Support/VPNToris/Engines/darwin-arm64/openconnect/bin/vpntoris-browser-open"
+cp "$scripts_root/browser-open-amd64" "$stage_root/Library/Application Support/VPNToris/Engines/darwin-amd64/openconnect/bin/vpntoris-browser-open"
 cp "$repo_root/scripts/macos/native-helper.plist" "$stage_root/Library/LaunchDaemons/com.vpntoris.native-helper.plist"
 cp "$repo_root/scripts/macos/native-postinstall" "$scripts_root/postinstall"
 chmod 0755 "$stage_root/Library/PrivilegedHelperTools/com.vpntoris.native-helper" "$scripts_root/postinstall"
@@ -78,9 +82,10 @@ for packaged_openconnect in "$stage_root/Library/Application Support/VPNToris/En
   for library in "$packaged_openconnect/lib/"*.dylib; do codesign --force --options runtime --timestamp --sign "$VPNTORIS_MACOS_APPLICATION_IDENTITY" "$library"; done
   codesign --force --options runtime --timestamp --sign "$VPNTORIS_MACOS_APPLICATION_IDENTITY" "$packaged_openconnect/bin/openconnect"
   codesign --force --options runtime --timestamp --sign "$VPNTORIS_MACOS_APPLICATION_IDENTITY" "$packaged_openconnect/bin/vpntoris-vpnc-script"
+  codesign --force --options runtime --timestamp --sign "$VPNTORIS_MACOS_APPLICATION_IDENTITY" "$packaged_openconnect/bin/vpntoris-browser-open"
   architecture=$(basename "$(dirname "$packaged_openconnect")" | sed 's/darwin-//')
   engine_sha256=$(shasum -a 256 "$packaged_openconnect/bin/openconnect" | awk '{print $1}')
-  files=$(for asset in "$packaged_openconnect/lib/"*.dylib "$packaged_openconnect/bin/vpntoris-vpnc-script"; do relative=${asset#"$packaged_openconnect/"}; printf '%s\t%s\n' "openconnect/$relative" "$(shasum -a 256 "$asset" | awk '{print $1}')"; done | jq -Rn '[inputs | split("\t") | {(.[0]): .[1]}] | add')
+  files=$(for asset in "$packaged_openconnect/lib/"*.dylib "$packaged_openconnect/bin/vpntoris-vpnc-script" "$packaged_openconnect/bin/vpntoris-browser-open"; do relative=${asset#"$packaged_openconnect/"}; printf '%s\t%s\n' "openconnect/$relative" "$(shasum -a 256 "$asset" | awk '{print $1}')"; done | jq -Rn '[inputs | split("\t") | {(.[0]): .[1]}] | add')
   jq -n --arg engine "$engine_sha256" --arg architecture "$architecture" --argjson files "$files" '{id:"openconnect",protocol:"openconnect",version:"9.21",os:"darwin",architecture:$architecture,executable:"openconnect/bin/openconnect",sha256:$engine,license:"LGPL-2.1-or-later",capabilities:["anyconnect","gp","pulse","nc","f5","fortinet","array","otp","split-route"],files:$files}' > "$packaged_openconnect/manifest.json"
 done
 packaged_engine="$stage_root/Library/Application Support/VPNToris/Engines/darwin-arm64/openfortivpn"

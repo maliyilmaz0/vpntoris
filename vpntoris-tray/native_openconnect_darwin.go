@@ -36,7 +36,7 @@ func nativeOpenConnectConnect(config VPNConfig) error {
 	for _, route := range routes {
 		values = append(values, fmt.Sprintf("%s/%d", route.network, route.prefix))
 	}
-	request := fortihelper.Request{Action: fortihelper.ActionStart, Profile: nativeProfileID(config.Name), Protocol: fortihelper.ProtocolOpenConnect, GatewayProtocol: openConnectProtocol(config), Host: config.Host, Port: port, Username: config.User, Password: config.Password, TwoFactor: config.TwoFactor, Routes: values}
+	request := fortihelper.Request{Action: fortihelper.ActionStart, Profile: nativeProfileID(config.Name), Protocol: fortihelper.ProtocolOpenConnect, GatewayProtocol: openConnectProtocol(config), Host: config.Host, Port: port, Username: config.User, Password: config.Password, TwoFactor: config.TwoFactor, ExternalBrowser: config.ExternalBrowser, Routes: values}
 	response, err := nativeFortiRequest(request)
 	request.Password = ""
 	if err != nil {

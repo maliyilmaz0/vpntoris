@@ -231,18 +231,32 @@ func (service *server) start(request fortihelper.Request) fortihelper.Response {
 		}
 		arguments = []string{
 			"--protocol=" + request.GatewayProtocol,
-			"--user=" + request.Username,
-			"--passwd-on-stdin",
 			"--script=" + scriptPath,
 			"--timestamp",
 			"--server=" + "https://" + net.JoinHostPort(request.Host, strconv.Itoa(request.Port)),
+		}
+		if request.Username != "" {
+			arguments = append(arguments, "--user="+request.Username)
+		}
+		if request.Password != "" {
+			arguments = append(arguments, "--passwd-on-stdin")
+		}
+		if request.ExternalBrowser {
+			browserPath := filepath.Join(filepath.Dir(executable), "vpntoris-browser-open")
+			if info, statErr := os.Stat(browserPath); statErr != nil || info.Mode()&0111 == 0 {
+				readInput.Close()
+				writeInput.Close()
+				logFile.Close()
+				return fortihelper.Response{State: "failed", Error: "OpenConnect browser broker is missing"}
+			}
+			arguments = append(arguments, "--external-browser="+browserPath)
 		}
 	}
 	command := exec.Command(executable, arguments...)
 	command.Stdin = readInput
 	command.Stdout = logFile
 	command.Stderr = logFile
-	command.Env = []string{"PATH=/usr/bin:/bin:/usr/sbin:/sbin", "LANG=C", "LC_ALL=C"}
+	command.Env = []string{"PATH=/usr/bin:/bin:/usr/sbin:/sbin", "LANG=C", "LC_ALL=C", "VPNTORIS_USER_UID=" + strconv.Itoa(service.userID)}
 	command.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	if err := command.Start(); err != nil {
 		readInput.Close()

@@ -41,6 +41,7 @@ type VPNConfig struct {
 	DNSServers          string       `json:"dnsServers"`
 	Config              string       `json:"config"`
 	OpenConnectProtocol string       `json:"openConnectProtocol,omitempty"`
+	ExternalBrowser     bool         `json:"externalBrowser,omitempty"`
 	IPSec               *IPSecConfig `json:"ipsec,omitempty"`
 }
 

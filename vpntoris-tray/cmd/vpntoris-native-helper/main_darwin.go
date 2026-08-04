@@ -450,6 +450,7 @@ func (service *server) startIPSecLocked(request fortihelper.Request) fortihelper
 	if err := load.Run(); err != nil {
 		logFile.Close()
 		_ = os.Remove(configPath)
+		service.stopIPSecDaemonIfIdleLocked()
 		return fortihelper.Response{State: "failed", Error: "could not load native IPsec profile"}
 	}
 	initiate := service.ipsecCommandFor("--initiate", "--child", "net-"+request.Profile, "--timeout", "45", "--loglevel", "2")
@@ -458,6 +459,7 @@ func (service *server) startIPSecLocked(request fortihelper.Request) fortihelper
 	if err := initiate.Run(); err != nil {
 		logFile.Close()
 		_ = os.Remove(configPath)
+		service.stopIPSecDaemonIfIdleLocked()
 		return fortihelper.Response{State: "failed", Error: "native IPsec negotiation failed"}
 	}
 	logFile.Close()
@@ -557,14 +559,16 @@ func (service *server) stopIPSecLocked(current *session) {
 		current.configPath = ""
 	}
 	current.state = "stopped"
-	active := false
+	service.stopIPSecDaemonIfIdleLocked()
+}
+
+func (service *server) stopIPSecDaemonIfIdleLocked() {
 	for _, candidate := range service.sessions {
-		if candidate != current && candidate.request.Protocol == fortihelper.ProtocolIPSec && candidate.state == "connected" {
-			active = true
-			break
+		if candidate.request.Protocol == fortihelper.ProtocolIPSec && candidate.state == "connected" {
+			return
 		}
 	}
-	if !active && service.ipsecCommand != nil && service.ipsecCommand.Process != nil {
+	if service.ipsecCommand != nil && service.ipsecCommand.Process != nil {
 		command := service.ipsecCommand
 		service.ipsecCommand = nil
 		service.ipsecLog = nil

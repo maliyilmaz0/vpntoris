@@ -19,6 +19,8 @@ openvpn_root="$repo_root/.build/native-engines/darwin-arm64/openvpn"
 openvpn_intel_root="$repo_root/.build/native-engines/darwin-amd64/openvpn"
 openconnect_root="$repo_root/.build/native-engines/darwin-arm64/openconnect"
 openconnect_intel_root="$repo_root/.build/native-engines/darwin-amd64/openconnect"
+strongswan_root="$repo_root/.build/native-engines/darwin-arm64/strongswan"
+strongswan_intel_root="$repo_root/.build/native-engines/darwin-amd64/strongswan"
 
 if [[ ! -x "$engine_root/bin/openfortivpn" ]]; then
   "$repo_root/scripts/macos/build-openfortivpn.sh"
@@ -34,6 +36,12 @@ if [[ ! -x "$openconnect_root/bin/openconnect" ]]; then
 fi
 if [[ ! -x "$openconnect_intel_root/bin/openconnect" ]]; then
   "$repo_root/scripts/macos/build-openconnect.sh" amd64
+fi
+if [[ ! -x "$strongswan_root/bin/charon" ]]; then
+  "$repo_root/scripts/macos/build-strongswan.sh" arm64
+fi
+if [[ ! -x "$strongswan_intel_root/bin/charon" ]]; then
+  "$repo_root/scripts/macos/build-strongswan.sh" amd64
 fi
 mkdir -p "$stage_root/Library/PrivilegedHelperTools"
 mkdir -p "$stage_root/Library/LaunchDaemons"
@@ -53,6 +61,8 @@ cp -R "$openvpn_root" "$stage_root/Library/Application Support/VPNToris/Engines/
 cp -R "$openvpn_intel_root" "$stage_root/Library/Application Support/VPNToris/Engines/darwin-amd64/openvpn"
 cp -R "$openconnect_root" "$stage_root/Library/Application Support/VPNToris/Engines/darwin-arm64/openconnect"
 cp -R "$openconnect_intel_root" "$stage_root/Library/Application Support/VPNToris/Engines/darwin-amd64/openconnect"
+cp -R "$strongswan_root" "$stage_root/Library/Application Support/VPNToris/Engines/darwin-arm64/strongswan"
+cp -R "$strongswan_intel_root" "$stage_root/Library/Application Support/VPNToris/Engines/darwin-amd64/strongswan"
 cp "$scripts_root/vpnc-script-arm64" "$stage_root/Library/Application Support/VPNToris/Engines/darwin-arm64/openconnect/bin/vpntoris-vpnc-script"
 cp "$scripts_root/vpnc-script-amd64" "$stage_root/Library/Application Support/VPNToris/Engines/darwin-amd64/openconnect/bin/vpntoris-vpnc-script"
 cp "$scripts_root/browser-open-arm64" "$stage_root/Library/Application Support/VPNToris/Engines/darwin-arm64/openconnect/bin/vpntoris-browser-open"
@@ -87,6 +97,15 @@ for packaged_openconnect in "$stage_root/Library/Application Support/VPNToris/En
   engine_sha256=$(shasum -a 256 "$packaged_openconnect/bin/openconnect" | awk '{print $1}')
   files=$(for asset in "$packaged_openconnect/lib/"*.dylib "$packaged_openconnect/bin/vpntoris-vpnc-script" "$packaged_openconnect/bin/vpntoris-browser-open"; do relative=${asset#"$packaged_openconnect/"}; printf '%s\t%s\n' "openconnect/$relative" "$(shasum -a 256 "$asset" | awk '{print $1}')"; done | jq -Rn '[inputs | split("\t") | {(.[0]): .[1]}] | add')
   jq -n --arg engine "$engine_sha256" --arg architecture "$architecture" --argjson files "$files" '{id:"openconnect",protocol:"openconnect",version:"9.21",os:"darwin",architecture:$architecture,executable:"openconnect/bin/openconnect",sha256:$engine,license:"LGPL-2.1-or-later",capabilities:["anyconnect","gp","pulse","nc","f5","fortinet","array","otp","split-route"],files:$files}' > "$packaged_openconnect/manifest.json"
+done
+for packaged_strongswan in "$stage_root/Library/Application Support/VPNToris/Engines/darwin-arm64/strongswan" "$stage_root/Library/Application Support/VPNToris/Engines/darwin-amd64/strongswan"; do
+  for library in "$packaged_strongswan/lib/"* "$packaged_strongswan/plugins/"*; do codesign --force --options runtime --timestamp --sign "$VPNTORIS_MACOS_APPLICATION_IDENTITY" "$library"; done
+  codesign --force --options runtime --timestamp --sign "$VPNTORIS_MACOS_APPLICATION_IDENTITY" "$packaged_strongswan/bin/swanctl"
+  codesign --force --options runtime --timestamp --sign "$VPNTORIS_MACOS_APPLICATION_IDENTITY" "$packaged_strongswan/bin/charon"
+  architecture=$(basename "$(dirname "$packaged_strongswan")" | sed 's/darwin-//')
+  engine_sha256=$(shasum -a 256 "$packaged_strongswan/bin/charon" | awk '{print $1}')
+  files=$(find "$packaged_strongswan/bin" "$packaged_strongswan/lib" "$packaged_strongswan/plugins" -type f ! -path '*/bin/charon' -print | sort | while IFS= read -r asset; do relative=${asset#"$packaged_strongswan/"}; printf '%s\t%s\n' "strongswan/$relative" "$(shasum -a 256 "$asset" | awk '{print $1}')"; done | jq -Rn '[inputs | split("\t") | {(.[0]): .[1]}] | add')
+  jq -n --arg engine "$engine_sha256" --arg architecture "$architecture" --argjson files "$files" '{id:"strongswan",protocol:"ipsec",version:"6.0.7",os:"darwin",architecture:$architecture,executable:"strongswan/bin/charon",sha256:$engine,license:"GPL-2.0-or-later",capabilities:["ikev1","ikev2","xauth","eap","sha1","dh20","split-route"],files:$files}' > "$packaged_strongswan/manifest.json"
 done
 packaged_engine="$stage_root/Library/Application Support/VPNToris/Engines/darwin-arm64/openfortivpn"
 engine_sha256=$(shasum -a 256 "$packaged_engine/bin/openfortivpn" | awk '{print $1}')

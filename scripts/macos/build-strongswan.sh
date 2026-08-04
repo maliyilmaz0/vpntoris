@@ -4,8 +4,8 @@ set -euo pipefail
 
 repo_root=$(cd "$(dirname "$0")/../.." && pwd)
 architecture=${1:-arm64}
-version=9.21
-source_sha256=ef0c875f3f8d8cc00e9647f36f87f2dd7d4ccad02c47c82f2dc5ba6b37edab06
+version=6.0.7
+source_sha256=e518e34e159514f4c6ba80d1f926cb151e0dd4e3a1d94213171234b8b9ae6f55
 case "$architecture" in
 arm64)
   bottle_tag=arm64_tahoe
@@ -20,16 +20,16 @@ amd64)
   exit 1
   ;;
 esac
-output_root="$repo_root/.build/native-engines/darwin-$architecture/openconnect"
-work_root=$(mktemp -d /tmp/vpntoris-openconnect.XXXXXX)
+output_root="$repo_root/.build/native-engines/darwin-$architecture/strongswan"
+work_root=$(mktemp -d /tmp/vpntoris-strongswan.XXXXXX)
 trap 'rm -rf "$work_root"' EXIT
 [[ "$output_root" == "$repo_root/.build/native-engines/"* ]] || exit 1
 chmod -R u+w "$output_root" 2>/dev/null || true
 rm -rf "$output_root"
-mkdir -p "$work_root/cellar" "$work_root/bottles" "$output_root/bin" "$output_root/lib" "$output_root/licenses" "$output_root/sources"
+mkdir -p "$work_root/cellar" "$work_root/bottles" "$output_root/bin" "$output_root/lib" "$output_root/plugins" "$output_root/licenses" "$output_root/sources"
 queue="$work_root/queue"
 processed="$work_root/processed"
-print -r -- openconnect > "$queue"
+print -r -- strongswan > "$queue"
 : > "$processed"
 while [[ -s "$queue" ]]; do
   formula=$(head -n 1 "$queue")
@@ -51,15 +51,27 @@ while [[ -s "$queue" ]]; do
   jq -r '.dependencies[]?' "$json" >> "$queue"
   print -r -- "$formula" >> "$processed"
 done
-executable=$(find "$work_root/cellar" -type f -path '*/openconnect/*/bin/openconnect' -perm +111 | head -n 1)
-[[ -n "$executable" ]] || { echo "OpenConnect executable was not found" >&2; exit 1; }
-cp "$executable" "$output_root/bin/openconnect"
+charon=$(find "$work_root/cellar" -type f -path '*/strongswan/*/libexec/ipsec/charon' | head -n 1)
+swanctl=$(find "$work_root/cellar" -type f -path '*/strongswan/*/bin/swanctl' | head -n 1)
+strong_root=$(dirname "$(dirname "$(dirname "$charon")")")
+[[ -n "$charon" && -n "$swanctl" && -d "$strong_root/lib/ipsec/plugins" ]] || { echo "strongSwan payload was not found" >&2; exit 1; }
+cp "$charon" "$output_root/bin/charon"
+cp "$swanctl" "$output_root/bin/swanctl"
+for plugin in "$strong_root/lib/ipsec/plugins/"*.so; do cp "$plugin" "$output_root/plugins/$(basename "$plugin")"; done
+for library in "$strong_root/lib/ipsec/"*.dylib; do
+  [[ -L "$library" ]] && continue
+  cp "$library" "$output_root/lib/$(basename "$library")"
+done
 pending="$work_root/pending"
-print -r -- "$output_root/bin/openconnect" > "$pending"
+find "$output_root/bin" "$output_root/lib" "$output_root/plugins" -type f > "$pending"
+processed_macho="$work_root/processed-macho"
+: > "$processed_macho"
 while [[ -s "$pending" ]]; do
   binary=$(head -n 1 "$pending")
   sed '1d' "$pending" > "$pending.next"
   mv "$pending.next" "$pending"
+  grep -qxF "$binary" "$processed_macho" && continue
+  print -r -- "$binary" >> "$processed_macho"
   otool -L "$binary" | tail -n +2 | awk '{print $1}' | while IFS= read -r dependency; do
     case "$dependency" in
       /usr/lib/*|/System/*|@loader_path/*|@rpath/*) continue ;;
@@ -74,11 +86,12 @@ while [[ -s "$pending" ]]; do
     fi
   done
 done
-for binary in "$output_root/bin/openconnect" "$output_root/lib/"*.dylib; do
-  [[ "$binary" == "$output_root/lib/"*.dylib ]] && [[ ! -e "$binary" ]] && continue
+for binary in "$output_root/bin/"* "$output_root/lib/"* "$output_root/plugins/"*; do
   if [[ "$binary" == "$output_root/lib/"* ]]; then
     install_name_tool -id "@loader_path/$(basename "$binary")" "$binary"
     prefix=@loader_path
+  elif [[ "$binary" == "$output_root/plugins/"* ]]; then
+    prefix=@loader_path/../lib
   else
     prefix=@loader_path/../lib
   fi
@@ -89,12 +102,12 @@ for binary in "$output_root/bin/openconnect" "$output_root/lib/"*.dylib; do
     install_name_tool -change "$dependency" "$prefix/$(basename "$dependency")" "$binary"
   done
 done
-file "$output_root/bin/openconnect" | grep -q "$output_arch" || { echo "Unexpected OpenConnect architecture" >&2; exit 1; }
-source_archive="$output_root/sources/openconnect-$version.tar.gz"
-curl -fsSL --retry 3 "https://gitlab.com/openconnect/openconnect/-/archive/v$version/openconnect-v$version.tar.gz" -o "$source_archive"
+file "$output_root/bin/charon" | grep -q "$output_arch" || { echo "Unexpected strongSwan architecture" >&2; exit 1; }
+source_archive="$output_root/sources/strongswan-$version.tar.bz2"
+cp /tmp/strongswan-$version.tar.bz2 "$source_archive" 2>/dev/null || curl -fsSL --retry 3 "https://download.strongswan.org/strongswan-$version.tar.bz2" -o "$source_archive"
 actual_source=$(shasum -a 256 "$source_archive" | awk '{print $1}')
-[[ "$actual_source" == "$source_sha256" ]] || { echo "OpenConnect source digest mismatch" >&2; exit 1; }
-tar -xOf "$source_archive" "openconnect-v$version/COPYING.LGPL" > "$output_root/licenses/openconnect.txt"
-engine_sha256=$(shasum -a 256 "$output_root/bin/openconnect" | awk '{print $1}')
-files=$(for library in "$output_root/lib/"*.dylib; do [[ -f "$library" ]] && printf '%s\t%s\n' "openconnect/lib/$(basename "$library")" "$(shasum -a 256 "$library" | awk '{print $1}')"; done | jq -Rn '[inputs | split("\t") | {(.[0]): .[1]}] | add // {}')
-jq -n --arg engine "$engine_sha256" --arg architecture "$architecture" --argjson files "$files" '{id:"openconnect",protocol:"openconnect",version:"9.21",os:"darwin",architecture:$architecture,executable:"openconnect/bin/openconnect",sha256:$engine,license:"LGPL-2.1-or-later",capabilities:["anyconnect","gp","pulse","nc","f5","fortinet","array","otp","split-route"],files:$files}' > "$output_root/manifest.json"
+[[ "$actual_source" == "$source_sha256" ]] || { echo "strongSwan source digest mismatch" >&2; exit 1; }
+tar -xOf "$source_archive" "strongswan-$version/COPYING" > "$output_root/licenses/strongswan.txt"
+engine_sha256=$(shasum -a 256 "$output_root/bin/charon" | awk '{print $1}')
+files=$(find "$output_root/bin" "$output_root/lib" "$output_root/plugins" -type f ! -path '*/bin/charon' -print | sort | while IFS= read -r asset; do relative=${asset#"$output_root/"}; printf '%s\t%s\n' "strongswan/$relative" "$(shasum -a 256 "$asset" | awk '{print $1}')"; done | jq -Rn '[inputs | split("\t") | {(.[0]): .[1]}] | add // {}')
+jq -n --arg engine "$engine_sha256" --arg architecture "$architecture" --argjson files "$files" '{id:"strongswan",protocol:"ipsec",version:"6.0.7",os:"darwin",architecture:$architecture,executable:"strongswan/bin/charon",sha256:$engine,license:"GPL-2.0-or-later",capabilities:["ikev1","ikev2","xauth","eap","dh20","split-route"],files:$files}' > "$output_root/manifest.json"

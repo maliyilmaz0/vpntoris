@@ -153,26 +153,7 @@ cd ..
 ./scripts/release.sh --unsigned
 ```
 
-The unsigned Universal DMG is written to `dist/`. It deliberately contains no Apple Developer ID or notarization. Set `ARCH=arm64` or `ARCH=x86_64` to create a single-architecture build. Before distributing or opening it, sign each executable and then the application bundle with your own Apple Developer ID certificate:
-
-```bash
-APP="build/release/VPNToris.app"
-IDENTITY="Developer ID Application: YOUR NAME (TEAMID)"
-for BIN in tun2socks vpntoris-route-helper vpntorisd vpntorisctl VPNToris; do
-  codesign --force --options runtime --timestamp --sign "$IDENTITY" "$APP/Contents/MacOS/$BIN"
-done
-codesign --force --deep --options runtime --timestamp --sign "$IDENTITY" "$APP"
-```
-
-For an official signed and notarized build, the script can instead use a Developer ID Application certificate and a `notarytool` keychain profile:
-
-```bash
-SIGN_IDENTITY="Developer ID Application: …" \
-NOTARY_PROFILE="FASTNAC_NOTARIZE" \
-./scripts/release.sh
-```
-
-The release script compiles optimized Go and Swift binaries, builds the app icon, bundles `tun2socks`, applies hardened-runtime signatures, creates a DMG, submits it to Apple notarization and staples the ticket.
+The unsigned Universal DMG and PKG are written to `dist/`. Set `ARCH=arm64` or `ARCH=x86_64` to create a single-architecture build. Official signed and notarized installers are published on the GitHub Releases page.
 
 ## Architecture
 

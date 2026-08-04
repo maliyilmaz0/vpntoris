@@ -9,7 +9,7 @@ if [[ -f "$repo_root/.env" ]]; then
   set +a
 fi
 : "${VPNTORIS_MACOS_INSTALLER_IDENTITY:?Set VPNTORIS_MACOS_INSTALLER_IDENTITY in .env}"
-version=${VERSION:-1.1.0}
+version=${VERSION:-1.2.0}
 architecture=${ARCH:-universal}
 application_package=${1:-"$repo_root/dist/VPNToris-$version-$architecture.pkg"}
 engine_package=${2:-"$repo_root/.build/VPNToris-Native-Engine-2.0.0-signed.pkg"}

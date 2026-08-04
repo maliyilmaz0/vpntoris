@@ -7,7 +7,7 @@ if [[ -f "$ROOT_DIR/.env" ]]; then
     source "$ROOT_DIR/.env"
     set +a
 fi
-VERSION=${VERSION:-1.1.0}
+VERSION=${VERSION:-1.2.0}
 ARCH=${ARCH:-universal}
 APP_NAME=VPNToris
 BUILD_DIR="$ROOT_DIR/build/release"

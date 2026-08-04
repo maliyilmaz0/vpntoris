@@ -11,7 +11,7 @@ mkdir -p "$OUT_DIR"
   echo "Generated: $(date -u '+%Y-%m-%dT%H:%M:%SZ')"
   echo
   echo "Application"
-  echo "- VPNToris: ${VERSION:-1.1.0}"
+  echo "- VPNToris: ${VERSION:-1.2.0}"
   echo "- Target: macOS universal (arm64, x86_64)"
   echo
   echo "Build toolchain"

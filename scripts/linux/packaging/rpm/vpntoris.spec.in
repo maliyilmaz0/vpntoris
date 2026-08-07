@@ -1,0 +1,61 @@
+Name:           vpntoris
+Version:        __VERSION__
+Release:        1%{?dist}
+Summary:        Multi-profile split-route corporate VPN client
+
+License:        Proprietary
+URL:            https://github.com/vpntoris/vpntoris
+# Arch-specific: payload contains compiled Go binaries for the target.
+BuildArch:      __RPM_ARCH__
+Requires:       systemd, iproute
+
+%description
+VPNToris manages concurrent VPN sessions with profile-scoped CIDR routes.
+Installs the localhost controller, privileged native helper, CLI and tray.
+
+%install
+mkdir -p %{buildroot}/usr/lib/vpntoris
+mkdir -p %{buildroot}/usr/bin
+mkdir -p %{buildroot}/usr/lib/systemd/system
+mkdir -p %{buildroot}/usr/share/applications
+mkdir -p %{buildroot}/var/lib/vpntoris/engines
+mkdir -p %{buildroot}/var/log/vpntoris
+cp %{_sourcedir}/vpntorisd %{buildroot}/usr/lib/vpntoris/
+cp %{_sourcedir}/vpntoris-native-helper %{buildroot}/usr/lib/vpntoris/
+cp %{_sourcedir}/vpntoris-service %{buildroot}/usr/lib/vpntoris/
+cp %{_sourcedir}/vpntorisctl %{buildroot}/usr/bin/
+cp %{_sourcedir}/vpntoris-tray %{buildroot}/usr/bin/
+cp %{_sourcedir}/vpntoris-native.service %{buildroot}/usr/lib/systemd/system/
+cp %{_sourcedir}/vpntoris-tray.desktop %{buildroot}/usr/share/applications/
+if [ -d %{_sourcedir}/engines ]; then
+  cp -a %{_sourcedir}/engines/. %{buildroot}/var/lib/vpntoris/engines/
+fi
+chmod 755 %{buildroot}/usr/lib/vpntoris/* %{buildroot}/usr/bin/vpntorisctl %{buildroot}/usr/bin/vpntoris-tray
+
+%files
+/usr/lib/vpntoris/vpntorisd
+/usr/lib/vpntoris/vpntoris-native-helper
+/usr/lib/vpntoris/vpntoris-service
+/usr/bin/vpntorisctl
+/usr/bin/vpntoris-tray
+/usr/lib/systemd/system/vpntoris-native.service
+/usr/share/applications/vpntoris-tray.desktop
+%dir /var/lib/vpntoris
+# Own the tree and every bundled engine file (openvpn/openconnect/openfortivpn/strongswan).
+# %dir alone leaves engines unpackaged → rpmbuild fails with "Installed (but unpackaged) file(s)".
+/var/lib/vpntoris/engines
+%dir /var/log/vpntoris
+
+%post
+systemctl daemon-reload >/dev/null 2>&1 || true
+systemctl enable vpntoris-native.service >/dev/null 2>&1 || true
+systemctl restart vpntoris-native.service >/dev/null 2>&1 || systemctl start vpntoris-native.service >/dev/null 2>&1 || true
+
+%preun
+if [ "$1" -eq 0 ]; then
+  systemctl stop vpntoris-native.service >/dev/null 2>&1 || true
+  systemctl disable vpntoris-native.service >/dev/null 2>&1 || true
+fi
+
+%postun
+systemctl daemon-reload >/dev/null 2>&1 || true

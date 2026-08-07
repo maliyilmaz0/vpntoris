@@ -1,0 +1,167 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  VPNToris complete Windows installer (mirrors macOS complete.pkg).
+  Placeholders substituted by build-msi.sh:
+    PRODUCT_NAME_PLACEHOLDER, COMPANY_PLACEHOLDER, VERSION_PLACEHOLDER
+  Built with wixl (msitools) on the maintainer macOS host.
+-->
+<Wix xmlns="http://schemas.microsoft.com/wix/2006/wi">
+
+  <Product Id="*"
+           Name="PRODUCT_NAME_PLACEHOLDER"
+           Language="1033"
+           Version="VERSION_PLACEHOLDER"
+           Manufacturer="COMPANY_PLACEHOLDER"
+           UpgradeCode="8F3A2C1B-9E7D-4A56-B0C1-D2E3F405A617">
+
+    <Package InstallerVersion="200"
+             Compressed="yes"
+             InstallScope="perMachine"
+             Description="PRODUCT_NAME_PLACEHOLDER complete installer (controller, helper, tray, native engines)"
+             Manufacturer="COMPANY_PLACEHOLDER" />
+
+    <MajorUpgrade DowngradeErrorMessage="A newer version of PRODUCT_NAME_PLACEHOLDER is already installed."
+                  AllowSameVersionUpgrades="yes" />
+
+    <Media Id="1" Cabinet="vpntoris.cab" EmbedCab="yes" />
+
+    <Directory Id="TARGETDIR" Name="SourceDir">
+      <Directory Id="ProgramFiles64Folder">
+        <Directory Id="INSTALLFOLDER" Name="PRODUCT_NAME_PLACEHOLDER">
+
+          <Component Id="ControllerExe" Guid="A11A1001-0001-4000-8000-000000000001">
+            <File Id="vpntorisdExe"
+                  Name="vpntorisd.exe"
+                  Source="vpntorisd.exe"
+                  KeyPath="yes" />
+            <!-- User-session controller: start at logon for all users. -->
+            <RegistryValue Root="HKLM"
+                           Key="SOFTWARE\Microsoft\Windows\CurrentVersion\Run"
+                           Name="PRODUCT_NAME_PLACEHOLDER Controller"
+                           Type="string"
+                           Value="[INSTALLFOLDER]vpntorisd.exe" />
+          </Component>
+
+          <Component Id="HelperExe" Guid="A11A1001-0001-4000-8000-000000000002">
+            <File Id="HelperFile"
+                  Name="vpntoris-native-helper.exe"
+                  Source="vpntoris-native-helper.exe"
+                  KeyPath="yes" />
+            <!-- Engine root = %ProgramData%\VPNToris\Engines (runtimepaths). -->
+            <ServiceInstall Id="VPNTorisNativeHelper"
+                            Type="ownProcess"
+                            Name="VPNTorisNativeHelper"
+                            DisplayName="PRODUCT_NAME_PLACEHOLDER Native Helper"
+                            Description="Privileged native engine helper (named pipe)"
+                            Start="auto"
+                            Account="LocalSystem"
+                            ErrorControl="normal"
+                            Arguments='service "[CommonAppDataFolder]VPNToris\Engines"' />
+            <ServiceControl Id="VPNTorisNativeHelperControl"
+                            Name="VPNTorisNativeHelper"
+                            Start="install"
+                            Stop="both"
+                            Remove="uninstall"
+                            Wait="yes" />
+          </Component>
+
+          <Component Id="ServiceToolExe" Guid="A11A1001-0001-4000-8000-000000000003">
+            <File Id="ServiceToolFile"
+                  Name="vpntoris-service.exe"
+                  Source="vpntoris-service.exe"
+                  KeyPath="yes" />
+          </Component>
+
+          <Component Id="CliExe" Guid="A11A1001-0001-4000-8000-000000000004">
+            <File Id="CliFile"
+                  Name="vpntorisctl.exe"
+                  Source="vpntorisctl.exe"
+                  KeyPath="yes" />
+          </Component>
+
+          <Component Id="TrayExe" Guid="A11A1001-0001-4000-8000-000000000005">
+            <File Id="TrayFile"
+                  Name="vpntoris-tray.exe"
+                  Source="vpntoris-tray.exe"
+                  KeyPath="yes" />
+            <RegistryValue Root="HKLM"
+                           Key="SOFTWARE\Microsoft\Windows\CurrentVersion\Run"
+                           Name="PRODUCT_NAME_PLACEHOLDER Tray"
+                           Type="string"
+                           Value="[INSTALLFOLDER]vpntoris-tray.exe" />
+          </Component>
+
+        </Directory>
+      </Directory>
+
+      <!-- Engines under ProgramData (see internal/runtimepaths paths_windows.go) -->
+      <Directory Id="CommonAppDataFolder">
+        <Directory Id="VPNTorisDataFolder" Name="VPNToris">
+          <Directory Id="ENGINEFOLDER" Name="Engines">
+            <!-- Harvested engine payload is merged via engines-fragment.wxs -->
+          </Directory>
+          <Directory Id="LogsFolder" Name="Logs">
+            <Component Id="LogsDir" Guid="A11A1001-0001-4000-8000-000000000010">
+              <CreateFolder />
+              <RegistryValue Root="HKLM"
+                             Key="SOFTWARE\PRODUCT_NAME_PLACEHOLDER"
+                             Name="LogsFolder"
+                             Type="string"
+                             Value="[LogsFolder]"
+                             KeyPath="yes" />
+            </Component>
+          </Directory>
+          <Directory Id="StateFolder" Name="State">
+            <Component Id="StateDir" Guid="A11A1001-0001-4000-8000-000000000011">
+              <CreateFolder />
+              <RegistryValue Root="HKLM"
+                             Key="SOFTWARE\PRODUCT_NAME_PLACEHOLDER"
+                             Name="StateFolder"
+                             Type="string"
+                             Value="[StateFolder]"
+                             KeyPath="yes" />
+            </Component>
+          </Directory>
+        </Directory>
+      </Directory>
+    </Directory>
+
+    <Feature Id="Complete" Level="1">
+      <ComponentRef Id="ControllerExe" />
+      <ComponentRef Id="HelperExe" />
+      <ComponentRef Id="ServiceToolExe" />
+      <ComponentRef Id="CliExe" />
+      <ComponentRef Id="TrayExe" />
+      <ComponentRef Id="LogsDir" />
+      <ComponentRef Id="StateDir" />
+      <ComponentGroupRef Id="EngineFiles" />
+    </Feature>
+
+    <!-- Launch controller + tray after install (type-51 + type-50). -->
+    <CustomAction Id="SetLaunchControllerExe"
+                  Property="LaunchControllerExe"
+                  Value="[INSTALLFOLDER]vpntorisd.exe" />
+    <CustomAction Id="LaunchController"
+                  Property="LaunchControllerExe"
+                  ExeCommand=""
+                  Execute="immediate"
+                  Return="asyncNoWait" />
+
+    <CustomAction Id="SetLaunchTrayExe"
+                  Property="LaunchTrayExe"
+                  Value="[INSTALLFOLDER]vpntoris-tray.exe" />
+    <CustomAction Id="LaunchTray"
+                  Property="LaunchTrayExe"
+                  ExeCommand=""
+                  Execute="immediate"
+                  Return="asyncNoWait" />
+
+    <InstallExecuteSequence>
+      <Custom Action="SetLaunchControllerExe" Sequence="6601">NOT REMOVE</Custom>
+      <Custom Action="LaunchController" Sequence="6602">NOT REMOVE</Custom>
+      <Custom Action="SetLaunchTrayExe" Sequence="6603">NOT REMOVE</Custom>
+      <Custom Action="LaunchTray" Sequence="6604">NOT REMOVE</Custom>
+    </InstallExecuteSequence>
+
+  </Product>
+</Wix>

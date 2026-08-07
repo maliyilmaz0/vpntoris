@@ -51,14 +51,19 @@ mkdir -p "$stage_root/Library/LaunchDaemons"
 mkdir -p "$stage_root/Library/Application Support/VPNToris/Engines/darwin-arm64"
 mkdir -p "$stage_root/Library/Application Support/VPNToris/Engines/darwin-amd64"
 mkdir -p "$scripts_root"
+# Build intermediates MUST NOT live under scripts_root: pkgbuild --scripts packs
+# every file there into the PKG, and Apple notarization rejects unsigned Mach-O
+# leftovers (helper-amd64, browser-open-*, …). Keep a separate build scratch dir.
+build_tmp=$(mktemp -d /tmp/vpntoris-native-pkg-build.XXXXXX)
+trap 'rm -rf "$stage_root" "$scripts_root" "$build_tmp"' EXIT
 cd "$repo_root/vpntoris-tray"
-GOARCH=arm64 go build -trimpath -ldflags "-s -w" -o "$scripts_root/helper-arm64" ./cmd/vpntoris-native-helper
-GOARCH=amd64 go build -trimpath -ldflags "-s -w" -o "$scripts_root/helper-amd64" ./cmd/vpntoris-native-helper
-GOARCH=arm64 go build -trimpath -ldflags "-s -w" -o "$scripts_root/vpnc-script-arm64" ./cmd/vpntoris-vpnc-script
-GOARCH=amd64 go build -trimpath -ldflags "-s -w" -o "$scripts_root/vpnc-script-amd64" ./cmd/vpntoris-vpnc-script
-GOARCH=arm64 go build -trimpath -ldflags "-s -w" -o "$scripts_root/browser-open-arm64" ./cmd/vpntoris-browser-open
-GOARCH=amd64 go build -trimpath -ldflags "-s -w" -o "$scripts_root/browser-open-amd64" ./cmd/vpntoris-browser-open
-lipo -create "$scripts_root/helper-arm64" "$scripts_root/helper-amd64" -output "$stage_root/Library/PrivilegedHelperTools/com.vpntoris.native-helper"
+GOARCH=arm64 go build -trimpath -ldflags "-s -w" -o "$build_tmp/helper-arm64" ./cmd/vpntoris-native-helper
+GOARCH=amd64 go build -trimpath -ldflags "-s -w" -o "$build_tmp/helper-amd64" ./cmd/vpntoris-native-helper
+GOARCH=arm64 go build -trimpath -ldflags "-s -w" -o "$build_tmp/vpnc-script-arm64" ./cmd/vpntoris-vpnc-script
+GOARCH=amd64 go build -trimpath -ldflags "-s -w" -o "$build_tmp/vpnc-script-amd64" ./cmd/vpntoris-vpnc-script
+GOARCH=arm64 go build -trimpath -ldflags "-s -w" -o "$build_tmp/browser-open-arm64" ./cmd/vpntoris-browser-open
+GOARCH=amd64 go build -trimpath -ldflags "-s -w" -o "$build_tmp/browser-open-amd64" ./cmd/vpntoris-browser-open
+lipo -create "$build_tmp/helper-arm64" "$build_tmp/helper-amd64" -output "$stage_root/Library/PrivilegedHelperTools/com.vpntoris.native-helper"
 cp -R "$engine_root" "$stage_root/Library/Application Support/VPNToris/Engines/darwin-arm64/openfortivpn"
 cp -R "$openvpn_root" "$stage_root/Library/Application Support/VPNToris/Engines/darwin-arm64/openvpn"
 cp -R "$openvpn_intel_root" "$stage_root/Library/Application Support/VPNToris/Engines/darwin-amd64/openvpn"
@@ -66,14 +71,21 @@ cp -R "$openconnect_root" "$stage_root/Library/Application Support/VPNToris/Engi
 cp -R "$openconnect_intel_root" "$stage_root/Library/Application Support/VPNToris/Engines/darwin-amd64/openconnect"
 cp -R "$strongswan_root" "$stage_root/Library/Application Support/VPNToris/Engines/darwin-arm64/strongswan"
 cp -R "$strongswan_intel_root" "$stage_root/Library/Application Support/VPNToris/Engines/darwin-amd64/strongswan"
-cp "$scripts_root/vpnc-script-arm64" "$stage_root/Library/Application Support/VPNToris/Engines/darwin-arm64/openconnect/bin/vpntoris-vpnc-script"
-cp "$scripts_root/vpnc-script-amd64" "$stage_root/Library/Application Support/VPNToris/Engines/darwin-amd64/openconnect/bin/vpntoris-vpnc-script"
-cp "$scripts_root/browser-open-arm64" "$stage_root/Library/Application Support/VPNToris/Engines/darwin-arm64/openconnect/bin/vpntoris-browser-open"
-cp "$scripts_root/browser-open-amd64" "$stage_root/Library/Application Support/VPNToris/Engines/darwin-amd64/openconnect/bin/vpntoris-browser-open"
+cp "$build_tmp/vpnc-script-arm64" "$stage_root/Library/Application Support/VPNToris/Engines/darwin-arm64/openconnect/bin/vpntoris-vpnc-script"
+cp "$build_tmp/vpnc-script-amd64" "$stage_root/Library/Application Support/VPNToris/Engines/darwin-amd64/openconnect/bin/vpntoris-vpnc-script"
+cp "$build_tmp/browser-open-arm64" "$stage_root/Library/Application Support/VPNToris/Engines/darwin-arm64/openconnect/bin/vpntoris-browser-open"
+cp "$build_tmp/browser-open-amd64" "$stage_root/Library/Application Support/VPNToris/Engines/darwin-amd64/openconnect/bin/vpntoris-browser-open"
 cp "$repo_root/scripts/macos/native-helper.plist" "$stage_root/Library/LaunchDaemons/com.vpntoris.native-helper.plist"
+# scripts_root may only contain install scripts (shell), never Mach-O intermediates.
 cp "$repo_root/scripts/macos/native-postinstall" "$scripts_root/postinstall"
 chmod 0755 "$stage_root/Library/PrivilegedHelperTools/com.vpntoris.native-helper" "$scripts_root/postinstall"
 chmod 0644 "$stage_root/Library/LaunchDaemons/com.vpntoris.native-helper.plist"
+# Guard: refuse to package if any Mach-O leaked into --scripts.
+if find "$scripts_root" -type f -print0 | xargs -0 file 2>/dev/null | grep -q 'Mach-O'; then
+  echo "error: Mach-O binary found under pkg scripts dir (would fail notarization):" >&2
+  find "$scripts_root" -type f -print0 | xargs -0 file 2>/dev/null | sed 's/^/  /' >&2
+  exit 1
+fi
 codesign --force --options runtime --timestamp --sign "$VPNTORIS_MACOS_APPLICATION_IDENTITY" "$stage_root/Library/Application Support/VPNToris/Engines/darwin-arm64/openfortivpn/lib/libcrypto.3.dylib"
 codesign --force --options runtime --timestamp --sign "$VPNTORIS_MACOS_APPLICATION_IDENTITY" "$stage_root/Library/Application Support/VPNToris/Engines/darwin-arm64/openfortivpn/lib/libssl.3.dylib"
 codesign --force --options runtime --timestamp --sign "$VPNTORIS_MACOS_APPLICATION_IDENTITY" "$stage_root/Library/Application Support/VPNToris/Engines/darwin-arm64/openfortivpn/bin/openfortivpn"
@@ -116,8 +128,11 @@ ssl_sha256=$(shasum -a 256 "$packaged_engine/lib/libssl.3.dylib" | awk '{print $
 crypto_sha256=$(shasum -a 256 "$packaged_engine/lib/libcrypto.3.dylib" | awk '{print $1}')
 jq -n --arg engine "$engine_sha256" --arg ssl "$ssl_sha256" --arg crypto "$crypto_sha256" '{id:"openfortivpn",protocol:"fortigate-ssl",version:"1.24.1",os:"darwin",architecture:"arm64",executable:"openfortivpn/bin/openfortivpn",sha256:$engine,license:"GPL-3.0-or-later WITH OpenSSL-exception",capabilities:["ppp","otp","split-route"],files:{"openfortivpn/lib/libssl.3.dylib":$ssl,"openfortivpn/lib/libcrypto.3.dylib":$crypto}}' > "$packaged_engine/manifest.json"
 chmod -R u+w "$stage_root"
-xattr -cr "$stage_root"
-/usr/sbin/dot_clean -m "$stage_root"
+xattr -cr "$stage_root" "$scripts_root" 2>/dev/null || true
+/usr/sbin/dot_clean -m "$stage_root" 2>/dev/null || true
+# Drop AppleDouble (._*) junk that can sneak into --scripts / payload.
+find "$stage_root" "$scripts_root" \( -name '._*' -o -name '.DS_Store' \) -delete 2>/dev/null || true
 rm -f "$output_path"
 pkgbuild --root "$stage_root" --scripts "$scripts_root" --identifier com.vpntoris.native-engine --version 2.0.0 --install-location / --sign "$VPNTORIS_MACOS_INSTALLER_IDENTITY" "$output_path"
 pkgutil --check-signature "$output_path" || true
+echo "Native engine PKG ready: $output_path"

@@ -12,11 +12,14 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"sort"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
+
+	"vpntoris-tray/internal/runtimepaths"
 )
 
 const imageName = "vpntoris-client:next-3"
@@ -502,7 +505,11 @@ func runRootRouter(key, port string, routes []proxyRoute, domains []string, dnsP
 }
 
 func sendRouterRequest(request routerRequest) error {
-	connection, err := net.DialTimeout("unix", "/var/run/vpntoris/router.sock", time.Second)
+	socket := runtimepaths.Current().RouterSocket
+	if socket == "" {
+		return fmt.Errorf("routing helper is not available on this platform")
+	}
+	connection, err := net.DialTimeout("unix", socket, time.Second)
 	if err != nil {
 		return err
 	}
@@ -670,28 +677,34 @@ func handleDiagnosticsAPI(response http.ResponseWriter, _ *http.Request) {
 		traffic = append(traffic, item)
 	}
 	trafficState.RUnlock()
+	paths := runtimepaths.Current()
 	summary := struct {
 		Created  string            `json:"created"`
 		Version  string            `json:"version"`
 		OS       string            `json:"os"`
+		Arch     string            `json:"arch"`
+		Paths    runtimepaths.Paths `json:"paths"`
 		Docker   any               `json:"docker"`
 		Profiles []VPNConfig       `json:"profiles"`
 		Traffic  []trafficSnapshot `json:"traffic"`
-	}{time.Now().Format(time.RFC3339), "next", "macOS", dockerStatus, configs, traffic}
+	}{time.Now().Format(time.RFC3339), "next", runtime.GOOS, runtime.GOARCH, paths, dockerStatus, configs, traffic}
 	data, _ := json.MarshalIndent(summary, "", "  ")
 	writeDiagnosticFile(archive, "summary.json", data)
-	writeDiagnosticCommand(archive, "system.txt", "/usr/bin/uname", "-a")
-	writeDiagnosticCommand(archive, "routes.txt", "/usr/sbin/netstat", "-rn", "-f", "inet")
-	writeDiagnosticCommand(archive, "dns.txt", "/usr/sbin/scutil", "--dns")
-	writeDiagnosticCommand(archive, "route-helper-launchd.txt", "/bin/launchctl", "print", "system/com.vpntoris.router")
-	writeDiagnosticCommand(archive, "route-helper-socket.txt", "/usr/bin/stat", "-f", "%Sp %Su:%Sg %N", "/var/run/vpntoris", "/var/run/vpntoris/router.sock", "/Library/PrivilegedHelperTools/com.vpntoris.router", "/Library/PrivilegedHelperTools/com.vpntoris.tun2socks")
+	writePlatformDiagnostics(archive)
+	for _, config := range configs {
+		if nativeLog, err := os.ReadFile(paths.ProfileLog(nativeProfileID(config.Name))); err == nil {
+			writeDiagnosticFile(archive, "native/"+safeFileName(config.Name)+".log", []byte(sanitizeDiagnosticText(string(nativeLog))))
+		}
+	}
 	if docker := dockerPath(); docker != "" {
 		writeDiagnosticCommand(archive, "docker-containers.txt", docker, "ps", "-a", "--filter", "label=vpntoris=true", "--format", "{{.Names}}\t{{.Status}}\t{{.Image}}")
 		for _, config := range configs {
 			output, _ := dockerCommand("logs", "--tail", "500", containerName(config.Name)).CombinedOutput()
 			writeDiagnosticFile(archive, "logs/"+safeFileName(config.Name)+".log", []byte(sanitizeDiagnosticText(string(output))))
-			if helperLog, err := os.ReadFile(filepath.Join("/var/run/vpntoris", containerName(config.Name)+".log")); err == nil {
-				writeDiagnosticFile(archive, "route-helper/"+safeFileName(config.Name)+".log", []byte(sanitizeDiagnosticText(string(helperLog))))
+			if paths.RouterSocket != "" {
+				if helperLog, err := os.ReadFile(filepath.Join(filepath.Dir(paths.RouterSocket), containerName(config.Name)+".log")); err == nil {
+					writeDiagnosticFile(archive, "route-helper/"+safeFileName(config.Name)+".log", []byte(sanitizeDiagnosticText(string(helperLog))))
+				}
 			}
 		}
 	}

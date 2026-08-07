@@ -5,200 +5,93 @@
 <h1 align="center">VPNToris</h1>
 
 <p align="center">
-  A native macOS menu bar client for running multiple isolated VPN connections at the same time.
+  Multi-profile split-route corporate VPN client for macOS, Linux and Windows.
 </p>
 
-VPNToris creates one Docker container per VPN profile and routes only the CIDR blocks assigned to that profile. This makes it possible to reach separate private networks simultaneously without replacing the Mac's default internet route.
+**VPNToris 2.0.0-alpha** moves off a Docker runtime. VPN engines, the privileged helper and the local controller ship inside the platform installer. Split routes stay profile-scoped; the default internet path is not replaced.
 
-The user interface is a native SwiftUI tray app. A local Go service manages Docker containers, health checks and profile state; a narrowly scoped privileged helper installs per-destination routes through embedded `tun2socks` instances.
+## Status
+
+This repository currently publishes **2.0.0-alpha** builds.
+
+| Platform | Installer | Notes |
+|---|---|---|
+| macOS | Complete signed/notarized PKG | App + native engines |
+| Linux | DEB / RPM | Controller, helper, tray + engines |
+| Windows | MSI | Controller, helper, tray + OpenVPN/Wintun engines |
+
+Alpha quality: expect API and packaging changes before a stable 2.0.0.
 
 ## Features
 
-- Native SwiftUI menu bar interface
-- Multiple concurrent VPN connections with independent split routes
-- Ordered primary/backup gateways with negotiation-based failover and persisted active endpoint
-- Fortinet SSL VPN (`openfortivpn`), FortiClient-compatible IPsec, OpenConnect and OpenVPN profiles
-- IKEv1/IKEv2, Main/Aggressive mode, XAuth/EAP, Mode Config, NAT-T, DPD, Phase 1/2 proposals, PFS and common encryption/DH groups
-- Explicit IPsec DH Group 20 (`ECP-384`) support for FortiClient-compatible profiles
-- Inline OTP flow after negotiation starts, including cancel/retry controls
-- Live per-profile traffic counters, transfer rates and connection history
-- Persistent hourly/daily traffic analytics, reconnect totals, destinations and process rankings
-- Event-specific notification preferences, sounds and quiet hours
-- Active route, per-process connection and container log views
-- Application-aware VPN flow visibility showing process name, PID, protocol, destination and selected profile
-- Drag-and-drop OpenVPN/FortiClient profile import with review before saving
-- Automatic discovery of installed FortiClient, OpenVPN Connect, Tunnelblick and Viscosity profiles
-- Sanitized diagnostics ZIP export for support and troubleshooting
-- Verified update downloads using the SHA-256 file attached to each GitHub release
-- Secret-free JSON export and optional PBKDF2/AES-256-GCM encrypted profile backups
-- English and Turkish application languages
-- Bundled `vpntorisctl` command-line client with automatic symlink installation when the target directory is writable
-- Per-profile edit and delete actions
-- Embedded route helper and `tun2socks`; no separate system extension package
-- Signed and notarized macOS release workflow
+- Multiple concurrent VPN profiles with independent CIDR split routes
+- FortiGate SSL (`openfortivpn`), OpenVPN, OpenConnect and IPsec (platform support varies)
+- Local authenticated controller on `127.0.0.1:17984`
+- Privileged native helper (macOS LaunchDaemon / Linux systemd / Windows service)
+- Engines resolved from the install tree with manifest digests (not from `PATH`)
+- OTP/2FA flow when the gateway challenges after connect
+- macOS SwiftUI menu bar app; Linux/Windows tray + CLI
+- Credentials via platform stores (Keychain / libsecret path / Windows Credential Manager)
 
 ## Requirements
 
-- Apple Silicon or Intel Mac (`arm64` or `x86_64`)
-- macOS 13 Ventura or later
-- [Docker Desktop for Mac](https://www.docker.com/products/docker-desktop/)
-- An administrator account for the one-time route-helper installation through Terminal
-- Network access to the VPN gateway; IPsec commonly requires outbound UDP 500 and 4500
-- VPN credentials, remote gateway and the private CIDR routes supplied by your VPN administrator
+### macOS
 
-VPNToris checks Docker automatically when it opens. If Docker Desktop is missing or its engine is stopped, the SwiftUI tray displays an installation/startup warning with the appropriate action. When Docker is ready but the `vpntoris-client` image does not exist, VPNToris builds it automatically from the Docker context embedded in the app bundle and displays the build progress. No manual `docker build` command is required.
+- Apple Silicon or Intel Mac
+- macOS 13 Ventura or later
+- Administrator rights for the privileged helper install
+
+### Linux
+
+- amd64 or arm64
+- systemd, iproute2
+- Optional tray dialog helpers (`zenity` / `kdialog` / `whiptail`)
+
+### Windows
+
+- Windows 10/11 x64
+- Administrator rights for the native helper service
 
 ## Install
 
-1. Download and open the signed/notarized PKG from [Releases](https://github.com/maliyilmaz0/vpntoris/releases).
-2. Complete the standard macOS Installer flow. The package installs `VPNToris.app`, the privileged routing helper, its LaunchDaemon and the `vpntorisctl` command automatically.
-3. Open VPNToris. It prepares the VPN image automatically. Start Docker Desktop from the warning if it is not already running.
+Download the platform package from [Releases](https://github.com/maliyilmaz0/vpntoris/releases) (pre-release **2.0.0-alpha**).
 
-The DMG remains available for manual installation. DMG users must install the routing helper once from Terminal:
+- **macOS:** open the complete PKG (`*-universal-complete.pkg`)
+- **Linux:** install the DEB or RPM for your architecture
+- **Windows:** install the MSI
 
-```bash
-sudo "/Applications/VPNToris.app/Contents/MacOS/vpntoris-route-helper" install "$(id -u)"
-```
-5. Add a profile, enter one or more destination networks in CIDR form (for example `10.38.0.0/16, 10.68.236.0/24`) and connect.
-
-Only the configured destinations go through a VPN. Normal internet traffic keeps using the Mac's existing default route. When private networks overlap, macOS selects the most specific matching route; avoid assigning the same prefix to two active profiles unless that is intentional.
-
-After the VPN tunnel becomes healthy, VPNToris waits three seconds and installs the profile's routes automatically. The profile card shows **Routes will be added**, **Adding routes** and **Routes active** states. **Reapply Routes** remains available for manual recovery.
-
-## Protocol compatibility status
-
-- FortiGate SSL VPN and FortiClient-compatible IPsec are the currently exercised connection paths.
-- IPsec includes DH Group 20 (`ECP-384`) in both Phase 1 and PFS/Phase 2 selections.
-- Palo Alto GlobalProtect support is implemented through OpenConnect but has not yet been tested end to end against a GlobalProtect gateway.
-- OpenVPN profile import and connection support are implemented but have not yet been tested end to end against a production OpenVPN gateway.
-
-## OTP / 2FA
-
-Enable **Ask for 2FA / OTP** on the profile. Start the connection first; when the gateway requests the second factor, VPNToris keeps the connection card open and presents the OTP field. Enter the newly received code there. IPsec XAuth OTP is passed to the container through a short-lived FIFO rather than a Docker environment variable.
-
-## Gateway failover
-
-Enter backup gateway hostnames or IP addresses in the profile editor and choose how many failed automatic reconnect attempts are allowed before switching. VPNToris does not use ICMP or assume that ping is enabled. It evaluates the actual VPN negotiation and tunnel health, moves through the configured gateways in order and remembers the selected endpoint across application restarts. The active gateway and endpoint count are shown on the profile card. OpenVPN profiles receive a temporary runtime configuration containing the selected gateway; the saved `.ovpn` content is not modified.
-
-## Security notes
-
-- Profiles are stored for the current user at `~/Library/Application Support/VPNToris/configs.json` with user-only file permissions.
-- Passwords and IPsec pre-shared keys are never saved inside the VPN profile JSON. When credentials are remembered, they are stored as separate macOS Keychain items. Saving or exporting an ordinary profile therefore does not embed its password.
-- The local management API listens only on `127.0.0.1:17984`.
-- The privileged helper accepts a limited route start/stop protocol over `/var/run/vpntoris/router.sock` and validates requested CIDRs and ports.
-- Diagnostics export excludes Keychain credentials and container environments, clears legacy credential fields and masks password, secret, PSK, token and OTP patterns in collected output.
-- The updater verifies a downloaded DMG against the release's SHA-256 asset before saving it. Installation remains an explicit user action.
-- Local profile files, logs, build products and secret files are excluded from Git. Never commit exported VPN configurations.
-
-## Profile import
-
-Drop an OpenVPN `.ovpn`/`.conf` or FortiClient export file directly onto the tray window, or choose **Import VPN Profile…** from the tray menu. The OpenVPN editor also has its own drop area. **Discover Installed VPN Profiles…** scans the standard macOS locations used by FortiClient, OpenVPN Connect, Tunnelblick and Viscosity, including FortiClient's multi-profile `vpn.plist`. VPNToris extracts non-secret connection fields and opens the normal editor for review. Passwords and pre-shared keys are not imported. Add the destination CIDRs and credentials before saving. Imported files are never copied into the repository.
-
-## Command line
-
-The application bundle contains `vpntorisctl`. On launch, VPNToris automatically creates a symlink in `/opt/homebrew/bin` when that directory is available and writable. Intel/Homebrew installations can use `/usr/local/bin`. Open **Help and CLI** from the tray menu to inspect the installation, copy commands or install the link manually.
-
-```bash
-sudo ln -sf "/Applications/VPNToris.app/Contents/MacOS/vpntorisctl" "/usr/local/bin/vpntorisctl"
-vpntorisctl status
-vpntorisctl profiles
-vpntorisctl flows
-vpntorisctl routes
-vpntorisctl check-route 10.38.1.251
-VPNTORIS_PASSWORD='…' vpntorisctl connect "Profile Name"
-VPNTORIS_PASSWORD='…' VPNTORIS_PSK='…' vpntorisctl connect "IPsec Profile"
-vpntorisctl disconnect "Profile Name"
-vpntorisctl logs "Profile Name"
-```
-
-The tray application must be running because the CLI talks to its localhost controller. `VPNTORIS_PASSWORD` and `VPNTORIS_PSK` are read from the environment and sent only to the localhost API. They are never accepted as command-line arguments or written into the profile file by the CLI.
-
-## Application-aware traffic visibility
-
-Open **Active Connections** to see which local application is currently producing traffic for a configured VPN destination. Each flow includes the process name, PID, TCP destination, protocol and selected VPN profile. SSH sessions, VS Code Remote connections, browsers and database clients can therefore be associated with the tunnel they are using. **Traffic Analytics** provides longer-term per-profile totals, hourly/daily graphs, reconnect counts and sampled process/destination rankings. VPNToris records connection metadata and counters, not packet payloads or process command-line arguments.
-
-## Diagnostics
-
-Choose **Export Diagnostics…** from the tray menu to create a ZIP containing a sanitized summary, route and DNS state, Docker container status and the last 500 lines of each VPNToris container log. Review the archive before sharing it because gateway names, usernames, private CIDRs and hostnames may still be operationally sensitive even though credential values are removed.
-
-## Backup and restore
-
-The default JSON export contains profiles without passwords or IPsec pre-shared keys. Encrypted backups can optionally include Keychain credentials. They use PBKDF2-HMAC-SHA256 with 200,000 iterations for key derivation and AES-256-GCM for authenticated encryption. Existing profiles with matching names are replaced during restore.
-
-## Traffic analytics and notifications
-
-VPNToris retains hourly traffic buckets for seven days and daily buckets for 90 days. It also records reconnect counts and sampled destination/process names without recording payloads, DNS contents or command-line arguments. The Notifications screen controls connect, disconnect, gateway, OTP, Docker, route-conflict and update events independently, including sound and quiet-hour preferences.
-
-## Updates
-
-VPNToris checks the latest GitHub release in the background and also provides **Check for Updates…** in the tray menu. It downloads only a DMG that has a matching `.sha256` release asset, verifies the digest locally and saves the installer under `~/Downloads/VPNToris Updates`. The running application is not silently replaced.
-
-## Build from source
-
-Install Xcode Command Line Tools, Go, Docker Desktop and Xcode:
-
-```bash
-xcode-select --install
-brew install go
-```
-
-The current source targets Go `1.26.5` and tun2socks `v2.7.0`, the latest stable versions resolved when this release branch was prepared.
-
-Build and test the source:
+## Development (source)
 
 ```bash
 cd vpntoris-tray
 go test ./...
-cd ..
-./scripts/release.sh --unsigned
 ```
 
-The unsigned Universal DMG and PKG are written to `dist/`. Set `ARCH=arm64` or `ARCH=x86_64` to create a single-architecture build. Official signed and notarized installers are published on the GitHub Releases page.
-
-Generate the release component inventory (SBOM-style text report) with:
+Maintainer packaging (local only; signing secrets stay out of the tree):
 
 ```bash
-VERSION=1.2.0 ./scripts/generate-sbom.sh
+./build.sh 2.0.0-alpha darwin
+./build.sh 2.0.0-alpha linux
+./build.sh 2.0.0-alpha windows
 ```
 
-The report is written to `dist/VPNToris-sbom.txt` and lists the Go module graph,
-Swift/Xcode toolchain and bundled VPN engine versions. It contains no credentials
-or profile data.
-
-## Architecture
+Output layout:
 
 ```text
-SwiftUI menu bar app
-        │  localhost API
-        ▼
-Go controller ───── Docker Engine ───── one VPN + SOCKS container per profile
-        │
-        ▼
-privileged route helper ───── tun2socks/utun ───── destination CIDR routes
+versions/<ver>/
+  macos/
+  linux/
+  windows/
 ```
 
-The current 1.x macOS release still uses Docker for profiles that require the
-container path. Native macOS engines are bundled for supported connection paths
-and do not download runtime dependencies. The complete Docker-free,
-cross-platform engine and Linux/Windows installers are planned for VPNToris 2.0.
+## Safety contract
 
-## Upcoming
+- No default route unless an explicit full-tunnel mode is enabled later
+- Only profile CIDRs are installed as destinations
+- Mutations are journaled before apply; failures roll back
+- Recovery removes only resources whose ownership can be verified
+- Secrets are never written to logs, process arguments or profile JSON
 
-- Linux desktop application
-- Windows desktop application
+## License
 
-## Troubleshooting
-
-- **Docker unavailable:** open Docker Desktop and wait for `docker info` to succeed.
-- **Connected but host is unreachable:** confirm that the host belongs to a CIDR configured on that profile, then inspect **Active Routes** and **Logs**.
-- **IPsec stalls before OTP:** verify IKE version/mode, PSK, XAuth settings, Phase 1/2 proposals and UDP 500/4500 reachability.
-- **Route helper asks repeatedly:** remove a stale helper only if necessary, then reconnect so VPNToris can reinstall the signed version.
-- **Overlapping local network:** enter a more specific remote CIDR instead of routing a broad block that also contains the local LAN.
-
-## Author
-
-Mehmet Ali YILMAZ
-
-## Third-party software
-
-The app bundles [`tun2socks`](https://github.com/xjasonlyu/tun2socks) under its upstream license. The container image uses Ubuntu packages and a patched strongSwan `xauth-generic` plugin; their respective upstream licenses apply.
+See repository license terms for application code. Bundled VPN engines carry their own open-source licenses (GPL/LGPL/OpenSSL exception as applicable) and are redistributed with the product package.

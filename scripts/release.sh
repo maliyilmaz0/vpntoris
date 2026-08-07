@@ -45,8 +45,18 @@ mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources/Licenses" "$DIST_DIR"
 cp "$ROOT_DIR/vpntoris-tray/Info.plist" "$APP/Contents/Info.plist"
 cp "$ROOT_DIR/assets/vpntoris-logo.png" "$APP/Contents/Resources/VPNTorisLogo.png"
 cp -R "$ROOT_DIR/vpntoris-tray/Resources/." "$APP/Contents/Resources/"
+# Legacy Docker runtime context (v1). v2 native path does not require it.
+# Keep an empty directory so the app bundle layout stays stable if resources
+# still reference DockerContext; do not fail the complete product build.
 mkdir -p "$APP/Contents/Resources/DockerContext"
-cp -R "$ROOT_DIR/docker/." "$APP/Contents/Resources/DockerContext/"
+if [[ -d $ROOT_DIR/docker ]]; then
+  cp -R "$ROOT_DIR/docker/." "$APP/Contents/Resources/DockerContext/"
+else
+  printf '%s\n' \
+    "Docker runtime context is not bundled in this release." \
+    "VPNToris 2.x uses the native engine path (no Docker at runtime)." \
+    >"$APP/Contents/Resources/DockerContext/README.txt"
+fi
 
 export GOCACHE=${GOCACHE:-/tmp/vpntoris-release-go-cache}
 export CLANG_MODULE_CACHE_PATH=${CLANG_MODULE_CACHE_PATH:-/tmp/vpntoris-release-clang-cache}

@@ -2,12 +2,17 @@
 
 package platforminfo
 
-import "os"
+import "vpntoris-tray/internal/runtimepaths"
 
 func current() Capabilities {
-	programData := os.Getenv("ProgramData")
-	if programData == "" {
-		programData = `C:\ProgramData`
+	paths := runtimepaths.Current()
+	return Capabilities{
+		Platform:          paths.Platform,
+		StateDirectory:    paths.StateDirectory,
+		InterfaceBackend:  "Wintun",
+		RouteBackend:      "IP-Helper-API",
+		DNSBackend:        "DNS-Client-NRPT",
+		CredentialBackend: "Credential Manager",
+		PackageFormat:     "msi",
 	}
-	return Capabilities{Platform: "windows", StateDirectory: programData + `\VPNToris\State`, InterfaceBackend: "Wintun", RouteBackend: "IP-Helper-API", DNSBackend: "DNS-Client-NRPT", CredentialBackend: "Credential Manager", PackageFormat: "msi"}
 }

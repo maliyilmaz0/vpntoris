@@ -1,0 +1,12 @@
+Package: vpntoris
+Version: __VERSION__
+Section: net
+Priority: optional
+Architecture: __DEB_ARCH__
+Depends: systemd, iproute2, zenity | kdialog | whiptail
+Maintainer: VPNToris Maintainers <noreply@vpntoris.local>
+Description: Multi-profile split-route corporate VPN client
+ VPNToris manages concurrent VPN sessions with profile-scoped CIDR routes.
+ This package installs the localhost controller, privileged native helper,
+ CLI and system tray client. Engines are bundled under /var/lib/vpntoris/engines
+ when provided at package build time.

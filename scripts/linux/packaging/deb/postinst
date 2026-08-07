@@ -1,0 +1,11 @@
+#!/bin/bash
+set -e
+systemctl daemon-reload || true
+systemctl enable vpntoris-native.service || true
+systemctl restart vpntoris-native.service || systemctl start vpntoris-native.service || true
+# Controller stays user-session scoped; tray desktop file is available for autostart.
+if command -v update-desktop-database >/dev/null 2>&1; then
+  update-desktop-database /usr/share/applications 2>/dev/null || true
+fi
+echo "VPNToris installed. Start the tray (vpntoris-tray) after the controller is running."
+echo "Helper service: systemctl status vpntoris-native.service"

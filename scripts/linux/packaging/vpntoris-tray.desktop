@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=VPNToris
+Comment=Multi-profile split-route VPN tray
+Exec=/usr/bin/vpntoris-tray
+Icon=network-vpn
+Terminal=false
+Categories=Network;Security;
+StartupNotify=false
+X-GNOME-Autostart-enabled=true

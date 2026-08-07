@@ -1,0 +1,20 @@
+[Unit]
+Description=VPNToris native privileged helper
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/lib/vpntoris/vpntoris-native-helper daemon 0 /var/lib/vpntoris/engines
+Restart=on-failure
+RestartSec=2
+CapabilityBoundingSet=CAP_NET_ADMIN CAP_NET_RAW CAP_DAC_OVERRIDE CAP_SETUID CAP_SETGID
+AmbientCapabilities=CAP_NET_ADMIN CAP_NET_RAW
+NoNewPrivileges=false
+ProtectSystem=full
+ProtectHome=true
+PrivateTmp=true
+ReadWritePaths=/run/vpntoris-native /var/run/vpntoris-native /var/log/vpntoris /var/lib/vpntoris
+
+[Install]
+WantedBy=multi-user.target

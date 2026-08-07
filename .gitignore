@@ -1,18 +1,22 @@
 .DS_Store
 .build/
+versions/
 build/
 dist/
 release/
 *.app/
 *.dmg
 *.pkg
+*.msi
+*.deb
+*.rpm
 *.log
 logs/
 configs.json
 *.secrets.json
 .env
 .env.*
-!.env.example
+.env.example
 node_modules/
 .venv/
 *.xcodeproj/
@@ -28,4 +32,10 @@ node_modules/
 
 /assets/vpntoris-logo-source.png
 *.iconset/
-/TODO.md
+certs/
+docs/
+TODO.md
+AGENT_PROJECT_GUIDE.md
+# Markdown: ship README only
+*.md
+!README.md

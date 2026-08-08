@@ -167,7 +167,6 @@ cp -a "$ENGINE_SRC/." "$STAGE_DIR/var/lib/vpntoris/engines/linux-$GOARCH/"
 # package is fetched at build time and shipped under a private UUID so it can
 # never conflict with the distro's gnome-shell-extension-appindicator package.
 EXT_UUID="vpntoris-appindicator@vpntoris.local"
-EXT_UPSTREAM="appindicatorsupport@rgcjonas.gmail.com"
 EXT_DIR="$OUT_DIR/extension"
 echo "[2.5] Fetching AppIndicator shell extension (build-time download)..."
 rm -rf "$EXT_DIR"
@@ -198,6 +197,7 @@ prepare_extension() {
     exit 1
   fi
   rm -rf "$dst"
+  mkdir -p "$(dirname "$dst")"
   cp -a "$src" "$dst"
   # Private UUID + product name (host is macOS: BSD sed).
   sed -i '' \
@@ -205,11 +205,15 @@ prepare_extension() {
     -e "s/\"name\": *\"[^\"]*\"/\"name\": \"VPNToris AppIndicator\"/" \
     "$dst/metadata.json"
 }
+# Upstream UUID differs per distro (EPEL: appindicatorsupport@…, Debian:
+# ubuntu-appindicators@…), so discover the extracted extension directory.
+DEB_EXT_SRC=$(find "$EXT_DIR/deb/usr/share/gnome-shell/extensions" -mindepth 1 -maxdepth 1 -type d 2>/dev/null | head -1)
+RPM_EXT_SRC=$(find "$EXT_DIR/rpm/x/usr/share/gnome-shell/extensions" -mindepth 1 -maxdepth 1 -type d 2>/dev/null | head -1)
 prepare_extension \
-  "$EXT_DIR/deb/usr/share/gnome-shell/extensions/$EXT_UPSTREAM" \
+  "$DEB_EXT_SRC" \
   "$STAGE_DIR/usr/share/gnome-shell/extensions/$EXT_UUID"
 prepare_extension \
-  "$EXT_DIR/rpm/x/usr/share/gnome-shell/extensions/$EXT_UPSTREAM" \
+  "$RPM_EXT_SRC" \
   "$EXT_DIR/rpm-staged"
 mkdir -p "$STAGE_DIR/usr/share/glib-2.0/schemas"
 cp "$PACKAGING_DIR/20_vpntoris-appindicator.gschema.override" "$STAGE_DIR/usr/share/glib-2.0/schemas/"

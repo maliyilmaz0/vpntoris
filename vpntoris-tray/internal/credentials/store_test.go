@@ -2,9 +2,18 @@
 
 package credentials
 
-import "testing"
+import (
+	"os"
+	"path/filepath"
+	"testing"
+)
 
-func TestMemoryStoreRoundTrip(t *testing.T) {
+func TestStoreRoundTrip(t *testing.T) {
+	// On Linux New() uses UserConfigDir; isolate with a temp HOME/XDG.
+	tmp := t.TempDir()
+	t.Setenv("HOME", tmp)
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(tmp, "config"))
+
 	store := New()
 	if err := store.Write("office", "password", "secret"); err != nil {
 		t.Fatal(err)
@@ -19,4 +28,16 @@ func TestMemoryStoreRoundTrip(t *testing.T) {
 	if _, err := store.Read("office", "password"); err == nil {
 		t.Fatal("expected missing credential after delete")
 	}
+	// Ensure we did not leave a world-readable credentials file when using file store.
+	if path := filepath.Join(tmp, "config", "VPNToris", "credentials.json"); fileExists(path) {
+		info, _ := os.Stat(path)
+		if info != nil && info.Mode().Perm()&0o077 != 0 {
+			t.Fatalf("credentials file mode too open: %v", info.Mode())
+		}
+	}
+}
+
+func fileExists(path string) bool {
+	_, err := os.Stat(path)
+	return err == nil
 }

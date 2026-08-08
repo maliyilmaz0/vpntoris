@@ -609,7 +609,10 @@ func startPACServer() error {
 }
 
 func handleResetAPI(response http.ResponseWriter, request *http.Request) {
-	response.Header().Set("Access-Control-Allow-Origin", "*")
+	if request.Header.Get("Origin") != "" {
+		http.Error(response, "browser requests are not allowed", http.StatusForbidden)
+		return
+	}
 	if request.Method != http.MethodPost {
 		http.Error(response, "method not allowed", http.StatusMethodNotAllowed)
 		return
@@ -997,6 +1000,10 @@ func parseFlows(output string) []activeFlow {
 }
 
 func handleRecoverAPI(response http.ResponseWriter, request *http.Request) {
+	if request.Header.Get("Origin") != "" {
+		http.Error(response, "browser requests are not allowed", http.StatusForbidden)
+		return
+	}
 	if request.Method != http.MethodPost {
 		http.Error(response, "method not allowed", http.StatusMethodNotAllowed)
 		return
@@ -1245,11 +1252,49 @@ type profileView struct {
 	RouteStatus   string `json:"routeStatus"`
 }
 
-func handleProfilesAPI(response http.ResponseWriter, _ *http.Request) {
-	response.Header().Set("Access-Control-Allow-Origin", "*")
+func handleProfilesAPI(response http.ResponseWriter, request *http.Request) {
+	// The loopback API is consumed by the tray/CLI only, which never send an
+	// Origin header. Rejecting browser-originated requests blocks cross-origin
+	// pages from reading or mutating profiles (CSRF / DNS rebinding).
+	if request.Header.Get("Origin") != "" {
+		http.Error(response, "browser requests are not allowed", http.StatusForbidden)
+		return
+	}
+	switch request.Method {
+	case http.MethodGet:
+		handleProfilesGet(response, request)
+	case http.MethodPost, http.MethodPut:
+		handleProfilesSave(response, request)
+	case http.MethodDelete:
+		handleProfilesDelete(response, request)
+	default:
+		http.Error(response, "method not allowed", http.StatusMethodNotAllowed)
+	}
+}
+
+func handleProfilesGet(response http.ResponseWriter, request *http.Request) {
 	configs, err := loadConfigs()
 	if err != nil {
 		http.Error(response, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	// Full config for editing (secrets stripped).
+	if name := strings.TrimSpace(request.URL.Query().Get("name")); name != "" {
+		for _, config := range configs {
+			if config.Name != name {
+				continue
+			}
+			config.Password = ""
+			if config.IPSec != nil {
+				copyIPSec := *config.IPSec
+				copyIPSec.PreSharedKey = ""
+				config.IPSec = &copyIPSec
+			}
+			response.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(response).Encode(config)
+			return
+		}
+		http.Error(response, "profile not found", http.StatusNotFound)
 		return
 	}
 	profiles := make([]profileView, 0, len(configs))
@@ -1279,6 +1324,93 @@ func handleProfilesAPI(response http.ResponseWriter, _ *http.Request) {
 	_ = json.NewEncoder(response).Encode(profiles)
 }
 
+func handleProfilesSave(response http.ResponseWriter, request *http.Request) {
+	var config VPNConfig
+	if err := json.NewDecoder(request.Body).Decode(&config); err != nil {
+		http.Error(response, "invalid profile JSON: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+	config.Name = strings.TrimSpace(config.Name)
+	config.Host = strings.TrimSpace(config.Host)
+	config.Type = strings.TrimSpace(config.Type)
+	if config.Name == "" || config.Host == "" {
+		http.Error(response, "profile name and host are required", http.StatusBadRequest)
+		return
+	}
+	if config.Type == "" {
+		config.Type = "openfortivpn"
+	}
+	switch config.Type {
+	case "openfortivpn", "ipsec", "openconnect", "openvpn":
+	default:
+		http.Error(response, "unsupported profile type: "+config.Type, http.StatusBadRequest)
+		return
+	}
+	replace := strings.TrimSpace(request.URL.Query().Get("replace"))
+	if replace == "" {
+		replace = config.Name
+	}
+	// Never persist secrets in the shared config file; tray/keychain supplies them at connect.
+	config.Password = ""
+	if config.IPSec != nil {
+		copyIPSec := *config.IPSec
+		copyIPSec.PreSharedKey = ""
+		config.IPSec = &copyIPSec
+	}
+	if err := upsertConfig(config, replace); err != nil {
+		http.Error(response, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	// Echo back without secrets; callers keep password/psk in their secret store.
+	response.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(response).Encode(config)
+}
+
+func handleProfilesDelete(response http.ResponseWriter, request *http.Request) {
+	name := strings.TrimSpace(request.URL.Query().Get("name"))
+	if name == "" {
+		http.Error(response, "name is required", http.StatusBadRequest)
+		return
+	}
+	configs, err := loadConfigs()
+	if err != nil {
+		http.Error(response, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	var selected *VPNConfig
+	for index := range configs {
+		if configs[index].Name == name {
+			selected = &configs[index]
+			break
+		}
+	}
+	if selected == nil {
+		http.Error(response, "profile not found", http.StatusNotFound)
+		return
+	}
+	connectionIntent.Lock()
+	delete(connectionIntent.names, selected.Name)
+	delete(connectionIntent.busy, selected.Name)
+	delete(connectionIntent.profiles, selected.Name)
+	connectionIntent.Unlock()
+	otpRequests.Lock()
+	delete(otpRequests.names, selected.Name)
+	otpRequests.Unlock()
+	_ = setSystemRoutes(containerName(selected.Name), "", "", false)
+	setRouteStatus(selected.Name, "")
+	if nativeFortiSupported(*selected) || nativeOpenVPNSupported(*selected) || nativeOpenConnectSupported(*selected) || nativeIPSecSupported(*selected) {
+		_ = nativeFortiDisconnect(selected.Name)
+	} else {
+		_ = disconnectVPN(containerName(selected.Name))
+	}
+	deleteGatewayState(selected.Name)
+	if err := deleteConfig(selected.Name); err != nil {
+		http.Error(response, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	response.WriteHeader(http.StatusNoContent)
+}
+
 var openConnectProtocols = map[string]bool{"anyconnect": true, "gp": true, "pulse": true, "nc": true, "f5": true, "fortinet": true, "array": true}
 
 func openConnectProtocol(config VPNConfig) string {
@@ -1296,7 +1428,10 @@ func openConnectProtocol(config VPNConfig) string {
 }
 
 func handleActionAPI(response http.ResponseWriter, request *http.Request) {
-	response.Header().Set("Access-Control-Allow-Origin", "*")
+	if request.Header.Get("Origin") != "" {
+		http.Error(response, "browser requests are not allowed", http.StatusForbidden)
+		return
+	}
 	if request.Method != http.MethodPost {
 		http.Error(response, "method not allowed", http.StatusMethodNotAllowed)
 		return
@@ -1604,6 +1739,10 @@ func handleRoutesAPI(response http.ResponseWriter, _ *http.Request) {
 	_ = json.NewEncoder(response).Encode(entries)
 }
 
+// configMu serializes read-modify-write cycles on configs.json so concurrent
+// profile saves/deletes cannot lose updates.
+var configMu sync.Mutex
+
 func loadConfigs() ([]VPNConfig, error) {
 	data, err := os.ReadFile(configPath)
 	if os.IsNotExist(err) {
@@ -1619,7 +1758,46 @@ func loadConfigs() ([]VPNConfig, error) {
 	return configs, nil
 }
 
+func saveConfigs(configs []VPNConfig) error {
+	if err := os.MkdirAll(filepath.Dir(configPath), 0700); err != nil {
+		return err
+	}
+	data, err := json.MarshalIndent(configs, "", "  ")
+	if err != nil {
+		return err
+	}
+	// Write to a temp file and rename so a crash mid-write cannot corrupt
+	// the whole profile list.
+	tmp := configPath + ".tmp"
+	if err := os.WriteFile(tmp, data, 0600); err != nil {
+		return err
+	}
+	return os.Rename(tmp, configPath)
+}
+
+// upsertConfig replaces replaceName (if set) and any existing profile with config.Name.
+func upsertConfig(config VPNConfig, replaceName string) error {
+	configMu.Lock()
+	defer configMu.Unlock()
+	configs, err := loadConfigs()
+	if err != nil {
+		return err
+	}
+	filtered := make([]VPNConfig, 0, len(configs)+1)
+	for _, existing := range configs {
+		if existing.Name == config.Name || (replaceName != "" && existing.Name == replaceName) {
+			continue
+		}
+		filtered = append(filtered, existing)
+	}
+	filtered = append(filtered, config)
+	sort.Slice(filtered, func(i, j int) bool { return filtered[i].Name < filtered[j].Name })
+	return saveConfigs(filtered)
+}
+
 func deleteConfig(name string) error {
+	configMu.Lock()
+	defer configMu.Unlock()
 	configs, err := loadConfigs()
 	if err != nil {
 		return err
@@ -1630,11 +1808,7 @@ func deleteConfig(name string) error {
 			filtered = append(filtered, config)
 		}
 	}
-	data, err := json.MarshalIndent(filtered, "", "  ")
-	if err != nil {
-		return err
-	}
-	return os.WriteFile(configPath, data, 0600)
+	return saveConfigs(filtered)
 }
 
 func containerName(name string) string {

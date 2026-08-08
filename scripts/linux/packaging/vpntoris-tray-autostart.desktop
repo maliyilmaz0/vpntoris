@@ -1,0 +1,16 @@
+[Desktop Entry]
+Type=Application
+Name=VPNToris
+Comment=Start VPNToris tray on login
+Exec=/usr/lib/vpntoris/vpntoris-tray-autostart
+TryExec=/usr/bin/vpntoris-tray
+Icon=vpntoris
+Terminal=false
+Categories=Network;Security;
+StartupNotify=false
+X-GNOME-Autostart-enabled=true
+X-GNOME-Autostart-Delay=5
+X-GNOME-Autostart-Phase=Application
+NoDisplay=false
+Hidden=false
+OnlyShowIn=GNOME;Unity;KDE;XFCE;LXQt;MATE;Cinnamon;

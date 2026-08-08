@@ -105,7 +105,18 @@ mkdir -p \
   "$STAGE_DIR/usr/lib/vpntoris" \
   "$STAGE_DIR/usr/bin" \
   "$STAGE_DIR/usr/lib/systemd/system" \
+  "$STAGE_DIR/usr/lib/systemd/user" \
   "$STAGE_DIR/usr/share/applications" \
+  "$STAGE_DIR/etc/xdg/autostart" \
+  "$STAGE_DIR/usr/share/icons/hicolor/16x16/apps" \
+  "$STAGE_DIR/usr/share/icons/hicolor/22x22/apps" \
+  "$STAGE_DIR/usr/share/icons/hicolor/24x24/apps" \
+  "$STAGE_DIR/usr/share/icons/hicolor/32x32/apps" \
+  "$STAGE_DIR/usr/share/icons/hicolor/48x48/apps" \
+  "$STAGE_DIR/usr/share/icons/hicolor/64x64/apps" \
+  "$STAGE_DIR/usr/share/icons/hicolor/128x128/apps" \
+  "$STAGE_DIR/usr/share/icons/hicolor/256x256/apps" \
+  "$STAGE_DIR/usr/share/pixmaps" \
   "$STAGE_DIR/var/lib/vpntoris/engines" \
   "$STAGE_DIR/var/log/vpntoris"
 
@@ -114,8 +125,23 @@ cp "$BIN_DIR/vpntoris-native-helper" "$STAGE_DIR/usr/lib/vpntoris/"
 cp "$BIN_DIR/vpntoris-service" "$STAGE_DIR/usr/lib/vpntoris/"
 cp "$BIN_DIR/vpntorisctl" "$STAGE_DIR/usr/bin/"
 cp "$BIN_DIR/vpntoris-tray" "$STAGE_DIR/usr/bin/"
+cp "$PACKAGING_DIR/vpntoris-tray-autostart.sh" "$STAGE_DIR/usr/lib/vpntoris/vpntoris-tray-autostart"
 cp "$PACKAGING_DIR/vpntoris-native.service" "$STAGE_DIR/usr/lib/systemd/system/"
+cp "$PACKAGING_DIR/vpntorisd.user.service" "$STAGE_DIR/usr/lib/systemd/user/vpntorisd.service"
 cp "$PACKAGING_DIR/vpntoris-tray.desktop" "$STAGE_DIR/usr/share/applications/"
+cp "$PACKAGING_DIR/vpntoris-tray-autostart.desktop" "$STAGE_DIR/etc/xdg/autostart/vpntoris-tray.desktop"
+# Application icon (desktop menu + GNOME search + panel)
+for size in 16 22 24 32 48 64 128 256; do
+  src="$ROOT_DIR/assets/icons/vpntoris-${size}.png"
+  if [[ -f $src ]]; then
+    cp "$src" "$STAGE_DIR/usr/share/icons/hicolor/${size}x${size}/apps/vpntoris.png"
+  fi
+done
+if [[ -f $ROOT_DIR/assets/icons/vpntoris-128.png ]]; then
+  cp "$ROOT_DIR/assets/icons/vpntoris-128.png" "$STAGE_DIR/usr/share/pixmaps/vpntoris.png"
+elif [[ -f $ROOT_DIR/assets/vpntoris-logo.png ]]; then
+  cp "$ROOT_DIR/assets/vpntoris-logo.png" "$STAGE_DIR/usr/share/pixmaps/vpntoris.png"
+fi
 chmod 755 "$STAGE_DIR/usr/lib/vpntoris/"* "$STAGE_DIR/usr/bin/vpntorisctl" "$STAGE_DIR/usr/bin/vpntoris-tray"
 
 ENGINE_SRC="$ROOT_DIR/.build/native-engines/linux-$GOARCH"
@@ -134,6 +160,60 @@ fi
 echo "[2/4] Bundling engines from $ENGINE_SRC (required product layer)"
 mkdir -p "$STAGE_DIR/var/lib/vpntoris/engines/linux-$GOARCH"
 cp -a "$ENGINE_SRC/." "$STAGE_DIR/var/lib/vpntoris/engines/linux-$GOARCH/"
+
+# ─── 2.5. Bundle AppIndicator GNOME Shell extension ───────────────
+# GNOME has no built-in StatusNotifier host. Instead of running dnf/apt at
+# install time (network access inside %post/postinst), the distro extension
+# package is fetched at build time and shipped under a private UUID so it can
+# never conflict with the distro's gnome-shell-extension-appindicator package.
+EXT_UUID="vpntoris-appindicator@vpntoris.local"
+EXT_UPSTREAM="appindicatorsupport@rgcjonas.gmail.com"
+EXT_DIR="$OUT_DIR/extension"
+echo "[2.5] Fetching AppIndicator shell extension (build-time download)..."
+rm -rf "$EXT_DIR"
+mkdir -p "$EXT_DIR/deb" "$EXT_DIR/rpm"
+docker run --rm --platform "$DOCKER_PLATFORM" \
+  -v "$EXT_DIR/deb:/ext" \
+  debian:bookworm-slim bash -ec '
+    export DEBIAN_FRONTEND=noninteractive
+    apt-get update -qq
+    cd /tmp
+    apt-get download gnome-shell-extension-appindicator 2>/dev/null
+    dpkg-deb -x gnome-shell-extension-appindicator*.deb /ext
+  '
+docker run --rm --platform "$DOCKER_PLATFORM" \
+  -v "$EXT_DIR/rpm:/ext" \
+  rockylinux:9 bash -ec '
+    dnf install -y -q epel-release cpio >/dev/null 2>&1
+    cd /tmp
+    dnf download -y -q gnome-shell-extension-appindicator >/dev/null 2>&1
+    mkdir -p /ext/x && cd /ext/x
+    rpm2cpio /tmp/gnome-shell-extension-appindicator*.rpm | cpio -idm --quiet
+  '
+
+prepare_extension() {
+  local src=$1 dst=$2
+  if [[ ! -f $src/metadata.json ]]; then
+    echo "error: AppIndicator extension payload missing at $src" >&2
+    exit 1
+  fi
+  rm -rf "$dst"
+  cp -a "$src" "$dst"
+  # Private UUID + product name (host is macOS: BSD sed).
+  sed -i '' \
+    -e "s/\"uuid\": *\"[^\"]*\"/\"uuid\": \"$EXT_UUID\"/" \
+    -e "s/\"name\": *\"[^\"]*\"/\"name\": \"VPNToris AppIndicator\"/" \
+    "$dst/metadata.json"
+}
+prepare_extension \
+  "$EXT_DIR/deb/usr/share/gnome-shell/extensions/$EXT_UPSTREAM" \
+  "$STAGE_DIR/usr/share/gnome-shell/extensions/$EXT_UUID"
+prepare_extension \
+  "$EXT_DIR/rpm/x/usr/share/gnome-shell/extensions/$EXT_UPSTREAM" \
+  "$EXT_DIR/rpm-staged"
+mkdir -p "$STAGE_DIR/usr/share/glib-2.0/schemas"
+cp "$PACKAGING_DIR/20_vpntoris-appindicator.gschema.override" "$STAGE_DIR/usr/share/glib-2.0/schemas/"
+echo "[2.5] Bundled extension: $EXT_UUID"
 
 # ─── 3. DEB via Debian container ──────────────────────────────────
 echo "[3/4] Building DEB (Docker / dpkg-deb)..."
@@ -168,10 +248,21 @@ rm -rf "$RPM_ROOT"
 mkdir -p "$RPM_ROOT"/{BUILD,RPMS,SOURCES,SPECS,SRPMS}
 cp "$BIN_DIR/vpntorisd" "$BIN_DIR/vpntoris-native-helper" "$BIN_DIR/vpntoris-service" \
   "$BIN_DIR/vpntorisctl" "$BIN_DIR/vpntoris-tray" \
-  "$PACKAGING_DIR/vpntoris-native.service" "$PACKAGING_DIR/vpntoris-tray.desktop" \
+  "$PACKAGING_DIR/vpntoris-native.service" \
+  "$PACKAGING_DIR/vpntorisd.user.service" \
+  "$PACKAGING_DIR/vpntoris-tray.desktop" \
+  "$PACKAGING_DIR/vpntoris-tray-autostart.desktop" \
+  "$PACKAGING_DIR/vpntoris-tray-autostart.sh" \
   "$RPM_ROOT/SOURCES/"
+for size in 16 22 24 32 48 64 128 256; do
+  if [[ -f $ROOT_DIR/assets/icons/vpntoris-${size}.png ]]; then
+    cp "$ROOT_DIR/assets/icons/vpntoris-${size}.png" "$RPM_ROOT/SOURCES/vpntoris-${size}.png"
+  fi
+done
 mkdir -p "$RPM_ROOT/SOURCES/engines/linux-$GOARCH"
 cp -a "$ENGINE_SRC/." "$RPM_ROOT/SOURCES/engines/linux-$GOARCH/"
+cp -a "$EXT_DIR/rpm-staged" "$RPM_ROOT/SOURCES/appindicator"
+cp "$PACKAGING_DIR/20_vpntoris-appindicator.gschema.override" "$RPM_ROOT/SOURCES/"
 sed -e "s/__VERSION__/${VERSION//-/_}/g" -e "s/__RPM_ARCH__/$RPM_ARCH/g" \
   "$PACKAGING_DIR/rpm/vpntoris.spec.in" >"$RPM_ROOT/SPECS/vpntoris.spec"
 

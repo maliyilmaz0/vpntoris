@@ -7,7 +7,17 @@ License:        Proprietary
 URL:            https://github.com/vpntoris/vpntoris
 # Arch-specific: payload contains compiled Go binaries for the target.
 BuildArch:      __RPM_ARCH__
-Requires:       systemd, iproute
+Requires:       systemd, iproute, glibc
+# openfortivpn PPP path needs pppd (BaseOS on EL9, resolved by dnf/rpm).
+Requires:       ppp
+# GNOME tray icon: a private AppIndicator shell extension is bundled under
+# /usr/share/gnome-shell/extensions/vpntoris-appindicator@vpntoris.local.
+Recommends:     zenity, libsecret
+# Engines ship private shared libraries under /var/lib/vpntoris/engines with
+# $ORIGIN rpath. Disable ELF auto-requires so dnf does not demand system
+# libopenconnect/libcharon packages that we intentionally do not use.
+AutoReq:        no
+AutoProv:       no
 
 %description
 VPNToris manages concurrent VPN sessions with profile-scoped CIDR routes.
@@ -17,7 +27,18 @@ Installs the localhost controller, privileged native helper, CLI and tray.
 mkdir -p %{buildroot}/usr/lib/vpntoris
 mkdir -p %{buildroot}/usr/bin
 mkdir -p %{buildroot}/usr/lib/systemd/system
+mkdir -p %{buildroot}/usr/lib/systemd/user
 mkdir -p %{buildroot}/usr/share/applications
+mkdir -p %{buildroot}/etc/xdg/autostart
+mkdir -p %{buildroot}/usr/share/icons/hicolor/16x16/apps
+mkdir -p %{buildroot}/usr/share/icons/hicolor/22x22/apps
+mkdir -p %{buildroot}/usr/share/icons/hicolor/24x24/apps
+mkdir -p %{buildroot}/usr/share/icons/hicolor/32x32/apps
+mkdir -p %{buildroot}/usr/share/icons/hicolor/48x48/apps
+mkdir -p %{buildroot}/usr/share/icons/hicolor/64x64/apps
+mkdir -p %{buildroot}/usr/share/icons/hicolor/128x128/apps
+mkdir -p %{buildroot}/usr/share/icons/hicolor/256x256/apps
+mkdir -p %{buildroot}/usr/share/pixmaps
 mkdir -p %{buildroot}/var/lib/vpntoris/engines
 mkdir -p %{buildroot}/var/log/vpntoris
 cp %{_sourcedir}/vpntorisd %{buildroot}/usr/lib/vpntoris/
@@ -25,31 +46,84 @@ cp %{_sourcedir}/vpntoris-native-helper %{buildroot}/usr/lib/vpntoris/
 cp %{_sourcedir}/vpntoris-service %{buildroot}/usr/lib/vpntoris/
 cp %{_sourcedir}/vpntorisctl %{buildroot}/usr/bin/
 cp %{_sourcedir}/vpntoris-tray %{buildroot}/usr/bin/
+cp %{_sourcedir}/vpntoris-tray-autostart.sh %{buildroot}/usr/lib/vpntoris/vpntoris-tray-autostart
 cp %{_sourcedir}/vpntoris-native.service %{buildroot}/usr/lib/systemd/system/
+cp %{_sourcedir}/vpntorisd.user.service %{buildroot}/usr/lib/systemd/user/vpntorisd.service
 cp %{_sourcedir}/vpntoris-tray.desktop %{buildroot}/usr/share/applications/
+cp %{_sourcedir}/vpntoris-tray-autostart.desktop %{buildroot}/etc/xdg/autostart/vpntoris-tray.desktop
+for size in 16 22 24 32 48 64 128 256; do
+  if [ -f %{_sourcedir}/vpntoris-${size}.png ]; then
+    cp %{_sourcedir}/vpntoris-${size}.png %{buildroot}/usr/share/icons/hicolor/${size}x${size}/apps/vpntoris.png
+  fi
+done
+if [ -f %{_sourcedir}/vpntoris-128.png ]; then
+  cp %{_sourcedir}/vpntoris-128.png %{buildroot}/usr/share/pixmaps/vpntoris.png
+fi
 if [ -d %{_sourcedir}/engines ]; then
   cp -a %{_sourcedir}/engines/. %{buildroot}/var/lib/vpntoris/engines/
 fi
+# Bundled AppIndicator shell extension (private UUID — no conflict with the
+# distro gnome-shell-extension-appindicator package).
+if [ -d %{_sourcedir}/appindicator ]; then
+  mkdir -p %{buildroot}/usr/share/gnome-shell/extensions
+  cp -a %{_sourcedir}/appindicator %{buildroot}/usr/share/gnome-shell/extensions/vpntoris-appindicator@vpntoris.local
+fi
+mkdir -p %{buildroot}/usr/share/glib-2.0/schemas
+cp %{_sourcedir}/20_vpntoris-appindicator.gschema.override %{buildroot}/usr/share/glib-2.0/schemas/
 chmod 755 %{buildroot}/usr/lib/vpntoris/* %{buildroot}/usr/bin/vpntorisctl %{buildroot}/usr/bin/vpntoris-tray
 
 %files
 /usr/lib/vpntoris/vpntorisd
 /usr/lib/vpntoris/vpntoris-native-helper
 /usr/lib/vpntoris/vpntoris-service
+/usr/lib/vpntoris/vpntoris-tray-autostart
 /usr/bin/vpntorisctl
 /usr/bin/vpntoris-tray
 /usr/lib/systemd/system/vpntoris-native.service
+/usr/lib/systemd/user/vpntorisd.service
 /usr/share/applications/vpntoris-tray.desktop
+/etc/xdg/autostart/vpntoris-tray.desktop
+/usr/share/icons/hicolor/*/apps/vpntoris.png
+/usr/share/pixmaps/vpntoris.png
 %dir /var/lib/vpntoris
 # Own the tree and every bundled engine file (openvpn/openconnect/openfortivpn/strongswan).
 # %dir alone leaves engines unpackaged → rpmbuild fails with "Installed (but unpackaged) file(s)".
 /var/lib/vpntoris/engines
 %dir /var/log/vpntoris
+/usr/share/glib-2.0/schemas/20_vpntoris-appindicator.gschema.override
+/usr/share/gnome-shell/extensions/vpntoris-appindicator@vpntoris.local
 
 %post
 systemctl daemon-reload >/dev/null 2>&1 || true
 systemctl enable vpntoris-native.service >/dev/null 2>&1 || true
 systemctl restart vpntoris-native.service >/dev/null 2>&1 || systemctl start vpntoris-native.service >/dev/null 2>&1 || true
+chmod 755 /run/vpntoris-native /var/log/vpntoris >/dev/null 2>&1 || true
+# Record the installing desktop user as an allowed helper client. The root
+# helper enforces this list via SO_PEERCRED (see helper-users.conf).
+mkdir -p /etc/vpntoris
+desktop_uid=""
+if [ -n "${SUDO_USER:-}" ] && [ "$SUDO_USER" != "root" ]; then
+  desktop_uid=$(id -u "$SUDO_USER" 2>/dev/null || true)
+fi
+if [ -z "$desktop_uid" ] && command -v loginctl >/dev/null 2>&1; then
+  desktop_uid=$(loginctl list-sessions --no-legend 2>/dev/null | awk '{print $2}' | grep -E '^[0-9]+$' | head -1 || true)
+fi
+if [ -n "$desktop_uid" ]; then
+  touch /etc/vpntoris/helper-users.conf
+  grep -qx "$desktop_uid" /etc/vpntoris/helper-users.conf 2>/dev/null || echo "$desktop_uid" >> /etc/vpntoris/helper-users.conf
+  chmod 644 /etc/vpntoris/helper-users.conf
+fi
+# Enable the bundled AppIndicator extension by default for new GNOME sessions.
+if command -v glib-compile-schemas >/dev/null 2>&1; then
+  glib-compile-schemas /usr/share/glib-2.0/schemas >/dev/null 2>&1 || true
+fi
+# Bundled engine binaries under /var/lib need an executable SELinux type on EL9.
+if command -v chcon >/dev/null 2>&1; then
+  chcon -t bin_t /usr/lib/vpntoris/vpntoris-native-helper >/dev/null 2>&1 || true
+  chcon -R -t bin_t /var/lib/vpntoris/engines >/dev/null 2>&1 || true
+fi
+gtk-update-icon-cache -f /usr/share/icons/hicolor >/dev/null 2>&1 || true
+update-desktop-database /usr/share/applications >/dev/null 2>&1 || true
 
 %preun
 if [ "$1" -eq 0 ]; then

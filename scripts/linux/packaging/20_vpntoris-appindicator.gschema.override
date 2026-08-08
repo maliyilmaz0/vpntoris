@@ -1,0 +1,8 @@
+# VPNToris ships a private copy of the AppIndicator shell extension so the
+# tray icon works on GNOME without installing EPEL/distro packages at install
+# time. These defaults apply to sessions that have not customized the keys.
+[org.gnome.shell]
+enabled-extensions=['vpntoris-appindicator@vpntoris.local']
+# The bundled extension targets a wide GNOME range; do not let the shell
+# disable it on unlisted versions.
+disable-extension-version-validation=true

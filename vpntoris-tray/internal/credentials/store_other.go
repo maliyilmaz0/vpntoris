@@ -1,4 +1,4 @@
-//go:build !windows
+//go:build !windows && !linux
 
 package credentials
 
@@ -8,8 +8,7 @@ type memoryStore struct {
 	values map[string]string
 }
 
-// New returns a non-Windows placeholder store. macOS uses Keychain in Swift UI;
-// Linux Secret Service integration remains a later CLI task.
+// New returns an in-memory store for non-Windows, non-Linux platforms (e.g. tests on macOS helpers).
 func New() Store {
 	return &memoryStore{values: map[string]string{}}
 }

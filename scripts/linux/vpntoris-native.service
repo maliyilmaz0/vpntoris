@@ -5,18 +5,32 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-# EngineRoot is the parent of linux-{arch}/ engine bundles installed by the package.
+# Create runtime/log dirs before start so ProtectSystem namespaces succeed (exit 226/NAMESPACE otherwise).
+RuntimeDirectory=vpntoris-native
+RuntimeDirectoryMode=0755
+LogsDirectory=vpntoris
+LogsDirectoryMode=0755
+StateDirectory=
+# Engine tree + journal state under /var/lib/vpntoris
+ReadWritePaths=/var/lib/vpntoris
+ExecStartPre=/bin/mkdir -p /var/lib/vpntoris/engines /var/lib/vpntoris/state /var/log/vpntoris /run/vpntoris-native
 ExecStart=/usr/lib/vpntoris/vpntoris-native-helper daemon 0 /var/lib/vpntoris/engines
+# Socket is root:root 0666; access is enforced per connection via SO_PEERCRED
+# against /etc/vpntoris/helper-users.conf (written by the package postinst).
 Restart=on-failure
 RestartSec=2
-# Required for route and tunnel management. Tighten further once AmbientCapabilities path is validated.
-CapabilityBoundingSet=CAP_NET_ADMIN CAP_NET_RAW CAP_DAC_OVERRIDE CAP_SETUID CAP_SETGID
+# Root service: full net admin for routes/TUN ownership checks.
+User=root
+CapabilityBoundingSet=CAP_NET_ADMIN CAP_NET_RAW CAP_DAC_OVERRIDE CAP_SETUID CAP_SETGID CAP_SYS_ADMIN
 AmbientCapabilities=CAP_NET_ADMIN CAP_NET_RAW
 NoNewPrivileges=false
-ProtectSystem=full
+# Avoid ProtectSystem=full — on EL9 it can fail namespace setup (status=226/NAMESPACE)
+# when combined with multiple ReadWritePaths under /var/run vs /run.
+ProtectSystem=false
 ProtectHome=true
 PrivateTmp=true
-ReadWritePaths=/run/vpntoris-native /var/log/vpntoris /var/lib/vpntoris
+# Note: on EL9 with SELinux Enforcing, bundled engines under /var/lib may need
+# a policy module or SELinux permissive for openfortivpn/openvpn exec.
 
 [Install]
 WantedBy=multi-user.target

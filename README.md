@@ -8,19 +8,25 @@
   Multi-profile split-route corporate VPN client for macOS, Linux and Windows.
 </p>
 
-**VPNToris 2.0.0-alpha** moves off a Docker runtime. VPN engines, the privileged helper and the local controller ship inside the platform installer. Split routes stay profile-scoped; the default internet path is not replaced.
+**VPNToris 2.1.0** runs fully native: VPN engines, the privileged helper and the local controller ship inside the platform installer — no Docker runtime. Split routes stay profile-scoped; the default internet path is not replaced.
 
 ## Status
 
-This repository currently publishes **2.0.0-alpha** builds.
+This repository currently publishes **2.1.0** builds.
 
 | Platform | Installer | Notes |
 |---|---|---|
 | macOS | Complete signed/notarized PKG | App + native engines |
-| Linux | DEB / RPM | Controller, helper, tray + engines |
+| Linux | DEB / RPM | Controller, helper, tray + engines; bundled AppIndicator extension for GNOME |
 | Windows | MSI | Controller, helper, tray + OpenVPN/Wintun engines |
 
-Alpha quality: expect API and packaging changes before a stable 2.0.0.
+## Test status
+
+| Platform | Status | Details |
+|---|---|---|
+| macOS | Tested | Tray UI, FortiGate SSL, IPsec (strongSwan, XAuth OTP), OpenConnect and OpenVPN verified end-to-end |
+| Linux | Partially tested | AlmaLinux 9.7: tray and FortiGate SSL VPN verified; IPsec, OpenConnect and OpenVPN not yet tested |
+| Windows | Not tested | Builds and packages, but no end-to-end testing has been done |
 
 ## Features
 
@@ -31,7 +37,7 @@ Alpha quality: expect API and packaging changes before a stable 2.0.0.
 - Engines resolved from the install tree with manifest digests (not from `PATH`)
 - OTP/2FA flow when the gateway challenges after connect
 - macOS SwiftUI menu bar app; Linux/Windows tray + CLI
-- Credentials via platform stores (Keychain / libsecret path / Windows Credential Manager)
+- Credentials via platform stores (Keychain / Secret Service via libsecret with a 0600 file fallback / Windows Credential Manager)
 
 ## Requirements
 
@@ -44,8 +50,9 @@ Alpha quality: expect API and packaging changes before a stable 2.0.0.
 ### Linux
 
 - amd64 or arm64
-- systemd, iproute2
-- Optional tray dialog helpers (`zenity` / `kdialog` / `whiptail`)
+- systemd, iproute2, ppp (resolved automatically from base repos)
+- GNOME: a private AppIndicator shell extension is bundled and enabled by default on next login
+- Optional: `libsecret` (`secret-tool`) for keyring-backed credential storage; dialogs use `zenity` / `kdialog` / `whiptail`
 
 ### Windows
 
@@ -54,7 +61,7 @@ Alpha quality: expect API and packaging changes before a stable 2.0.0.
 
 ## Install
 
-Download the platform package from [Releases](https://github.com/maliyilmaz0/vpntoris/releases) (pre-release **2.0.0-alpha**).
+Download the platform package from [Releases](https://github.com/maliyilmaz0/vpntoris/releases) (**2.1.0**).
 
 - **macOS:** open the complete PKG (`*-universal-complete.pkg`)
 - **Linux:** install the DEB or RPM for your architecture
@@ -70,9 +77,9 @@ go test ./...
 Maintainer packaging (local only; signing secrets stay out of the tree):
 
 ```bash
-./build.sh 2.0.0-alpha darwin
-./build.sh 2.0.0-alpha linux
-./build.sh 2.0.0-alpha windows
+./build.sh 2.1.0 darwin
+./build.sh 2.1.0 linux
+./build.sh 2.1.0 windows
 ```
 
 Output layout:

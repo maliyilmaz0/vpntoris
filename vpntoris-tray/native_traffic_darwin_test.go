@@ -15,7 +15,6 @@ func TestParseDarwinInterfaceCounters(t *testing.T) {
 		t.Fatalf("received=%d sent=%d", received, sent)
 	}
 }
-
 func TestParseDarwinInterfaceCountersRejectsOtherInterface(t *testing.T) {
 	output := "utun11    1500   <Link#41>                       10     0       1000       20     0       2000     0\n"
 	if _, _, err := parseDarwinInterfaceCounters(output, "utun12"); err == nil {

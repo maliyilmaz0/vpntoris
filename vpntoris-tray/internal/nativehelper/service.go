@@ -11,7 +11,6 @@ import (
 	"strings"
 	"sync"
 	"time"
-
 	"vpntoris-tray/internal/fortihelper"
 	"vpntoris-tray/internal/nativeengine"
 	"vpntoris-tray/internal/netbackend"
@@ -22,18 +21,13 @@ import (
 const negotiationTimeout = 300 * time.Second
 const journalOwner = "com.vpntoris.native-engine"
 
-// Config configures a privileged native helper service.
 type Config struct {
 	Paths      runtimepaths.Paths
 	EngineRoot string
 	UserID     int
 	Router     netbackend.Router
-	// Manager optionally journals and rolls back network mutations. When nil,
-	// New constructs one from Paths.StateDirectory and Router.
-	Manager *nativeengine.Manager
+	Manager    *nativeengine.Manager
 }
-
-// Service owns VPN sessions and privileged engine lifecycle.
 type Service struct {
 	mu           sync.Mutex
 	paths        runtimepaths.Paths
@@ -48,7 +42,6 @@ type Service struct {
 	ipsecConfig  string
 	ipsecSwanctl string
 }
-
 type session struct {
 	request        fortihelper.Request
 	command        *exec.Cmd
@@ -72,8 +65,6 @@ type session struct {
 	transaction    *nativeengine.Transaction
 }
 
-// New creates a native helper service. EngineRoot must already include the
-// os-arch engine bundle directory.
 func New(config Config) (*Service, error) {
 	if config.EngineRoot == "" {
 		return nil, fmt.Errorf("engine root is required")
@@ -82,8 +73,6 @@ func New(config Config) (*Service, error) {
 		config.Router = netbackend.New()
 	}
 	defaults := runtimepaths.Current()
-	// Merge path fields instead of replacing the whole struct so tests can omit
-	// StateDirectory without forcing a privileged system journal path.
 	if config.Paths.RuntimeDirectory == "" {
 		config.Paths.RuntimeDirectory = defaults.RuntimeDirectory
 	}
@@ -103,9 +92,6 @@ func New(config Config) (*Service, error) {
 		if journalErr != nil {
 			return nil, journalErr
 		}
-		// DNS must be wired: profile Domains+DNSServers produce MutationDNS after
-		// the tunnel is up. A nil DNS backend fails applyNetwork and kills openfortivpn
-		// (SIGHUP / "Cancelling threads") immediately after "Interface pppN is UP".
 		backend := netbackend.MutationBackend{Router: config.Router, DNS: netbackend.NewDNS()}
 		manager, journalErr = nativeengine.NewManager(journal, backend)
 		if journalErr != nil {
@@ -121,9 +107,6 @@ func New(config Config) (*Service, error) {
 		sessions:   make(map[string]*session),
 	}, nil
 }
-
-// PrepareRuntime creates runtime and log directories used by sessions and
-// recovers any journaled network mutations left by a previous crash.
 func (service *Service) PrepareRuntime() error {
 	if err := os.MkdirAll(service.paths.LogDirectory, 0751); err != nil {
 		return err
@@ -141,16 +124,12 @@ func (service *Service) PrepareRuntime() error {
 	}
 	return service.Recover(context.Background())
 }
-
-// Recover rolls back journaled network mutations whose ownership can be verified.
 func (service *Service) Recover(ctx context.Context) error {
 	if service.manager == nil {
 		return nil
 	}
 	return service.manager.Recover(ctx)
 }
-
-// Handle validates and dispatches a helper request.
 func (service *Service) Handle(request fortihelper.Request) fortihelper.Response {
 	if err := request.Validate(); err != nil {
 		return fortihelper.Response{State: "failed", Error: err.Error()}
@@ -170,8 +149,6 @@ func (service *Service) Handle(request fortihelper.Request) fortihelper.Response
 		return fortihelper.Response{State: "failed", Error: "invalid action"}
 	}
 }
-
-// Start begins a VPN session for the request profile.
 func (service *Service) Start(request fortihelper.Request) fortihelper.Response {
 	service.mu.Lock()
 	defer service.mu.Unlock()
@@ -342,8 +319,6 @@ func (service *Service) Start(request fortihelper.Request) fortihelper.Response 
 	go service.monitor(current)
 	return fortihelper.Response{State: "connecting"}
 }
-
-// SendOTP delivers a challenge response to an in-flight session.
 func (service *Service) SendOTP(request fortihelper.Request) fortihelper.Response {
 	service.mu.Lock()
 	defer service.mu.Unlock()
@@ -390,8 +365,6 @@ func (service *Service) SendOTP(request fortihelper.Request) fortihelper.Respons
 	current.state = "connecting"
 	return fortihelper.Response{State: current.state}
 }
-
-// Stop terminates one profile session.
 func (service *Service) Stop(profile string) fortihelper.Response {
 	service.mu.Lock()
 	defer service.mu.Unlock()
@@ -402,8 +375,6 @@ func (service *Service) Stop(profile string) fortihelper.Response {
 	service.stopLocked(current)
 	return fortihelper.Response{State: "stopped"}
 }
-
-// Reset stops every session and idle IPsec daemon resources.
 func (service *Service) Reset() fortihelper.Response {
 	service.mu.Lock()
 	defer service.mu.Unlock()
@@ -416,8 +387,6 @@ func (service *Service) Reset() fortihelper.Response {
 	service.stopIPSecDaemonIfIdleLocked()
 	return fortihelper.Response{State: "stopped"}
 }
-
-// Status returns the live state for a profile.
 func (service *Service) Status(profile string) fortihelper.Response {
 	service.mu.Lock()
 	defer service.mu.Unlock()
@@ -431,7 +400,6 @@ func (service *Service) Status(profile string) fortihelper.Response {
 	}
 	return fortihelper.Response{State: current.state, Interface: current.interfaceName, Error: current.errorText, Received: current.received, Sent: current.sent, Duration: duration}
 }
-
 func (service *Service) stopLocked(current *session) {
 	if current.request.Protocol == fortihelper.ProtocolIPSec {
 		service.stopIPSecLocked(current)
@@ -456,7 +424,6 @@ func (service *Service) stopLocked(current *session) {
 	terminateProcessGroup(current.command)
 	current.state = "stopped"
 }
-
 func (service *Service) releaseNetworkLocked(current *session) {
 	if current.transaction != nil && service.manager != nil {
 		_ = service.manager.Deactivate(context.Background(), current.transaction)
@@ -469,7 +436,6 @@ func (service *Service) releaseNetworkLocked(current *session) {
 		current.interfaceName = ""
 	}
 }
-
 func (service *Service) applyNetwork(current *session, interfaceName string) error {
 	if service.manager == nil {
 		return service.router.AddRoutes(interfaceName, current.request.Routes)
@@ -498,7 +464,6 @@ func (service *Service) applyNetwork(current *session, interfaceName string) err
 	service.mu.Unlock()
 	return nil
 }
-
 func (service *Service) finish(current *session, waitError error) {
 	service.mu.Lock()
 	defer service.mu.Unlock()
@@ -533,7 +498,6 @@ func (service *Service) finish(current *session, waitError error) {
 		current.errorText = "VPN process exited"
 	}
 }
-
 func (service *Service) fail(current *session, message string) {
 	service.mu.Lock()
 	defer service.mu.Unlock()
@@ -541,7 +505,6 @@ func (service *Service) fail(current *session, message string) {
 	service.stopLocked(current)
 	current.state = "failed"
 }
-
 func (service *Service) monitor(current *session) {
 	wait := make(chan error, 1)
 	go func() { wait <- current.command.Wait() }()
@@ -571,8 +534,6 @@ func (service *Service) monitor(current *session) {
 				continue
 			}
 			if err := service.applyNetwork(current, interfaceName); err != nil {
-				// Keep the tunnel up only if routes/DNS can be applied; otherwise
-				// tear down so the UI does not report "connected" without ownership.
 				service.fail(current, "network setup failed: "+err.Error())
 				go service.finish(current, <-wait)
 				return

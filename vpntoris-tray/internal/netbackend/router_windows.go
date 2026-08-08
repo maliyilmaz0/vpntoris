@@ -9,14 +9,11 @@ import (
 	"strconv"
 )
 
-// New returns the Windows route backend (route.exe with interface index).
 func New() Router {
 	return NewWindowsRouter(func(name string, args ...string) ([]byte, error) {
 		return exec.Command(name, args...).CombinedOutput()
 	}, interfaceIndex)
 }
-
-// NewWindowsRouter builds a Windows router with injectable command and index lookup.
 func NewWindowsRouter(run Runner, indexOf func(string) (int, error)) Router {
 	if indexOf == nil {
 		indexOf = interfaceIndex
@@ -51,7 +48,6 @@ func (router windowsRouter) AddRoutes(interfaceName string, routes []string) err
 			router.DeleteRoutes(interfaceName, applied)
 			return err
 		}
-		// 0.0.0.0 gateway with IF binds the destination route to the VPN interface.
 		output, err := router.run("route", "ADD", network, "MASK", mask, "0.0.0.0", "IF", strconv.Itoa(index))
 		if err != nil {
 			router.DeleteRoutes(interfaceName, applied)
@@ -61,7 +57,6 @@ func (router windowsRouter) AddRoutes(interfaceName string, routes []string) err
 	}
 	return nil
 }
-
 func (router windowsRouter) DeleteRoutes(interfaceName string, routes []string) {
 	if interfaceName == "" || router.run == nil {
 		return
@@ -78,7 +73,6 @@ func (router windowsRouter) DeleteRoutes(interfaceName string, routes []string) 
 		_, _ = router.run("route", "DELETE", network, "MASK", mask, "IF", strconv.Itoa(index))
 	}
 }
-
 func interfaceIndex(name string) (int, error) {
 	iface, err := net.InterfaceByName(name)
 	if err != nil {

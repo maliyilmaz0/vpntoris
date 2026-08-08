@@ -1,20 +1,4 @@
 #!/bin/bash
-# Deploy VPNToris Linux packages to a remote host (e.g. ESXi guest with a desktop).
-#
-# Use this when you have real VMs with UI (Ubuntu/GNOME, Rocky, etc.) on ESXi
-# and want to install the built DEB/RPM over SSH for tray testing.
-#
-# Usage:
-#   ./scripts/linux/deploy-remote.sh user@10.10.10.50
-#   ./scripts/linux/deploy-remote.sh user@10.10.10.50 path/to/vpntoris_2.0.0_amd64.deb
-#   ARCH=arm64 ./scripts/linux/deploy-remote.sh user@host
-#   ./scripts/linux/deploy-remote.sh --start-tray user@host
-#
-# Prerequisites on the guest:
-#   - SSH + sudo
-#   - Desktop session for tray (GNOME/KDE/XFCE + AppIndicator)
-#   - Matching package arch (amd64 DEB on x86_64 guest, arm64 on aarch64)
-#
 set -euo pipefail
 
 ROOT_DIR=$(cd "$(dirname "$0")/../.." && pwd)
@@ -56,7 +40,6 @@ if [[ ! $TARGET =~ @ ]]; then
   exit 1
 fi
 
-# Probe guest arch if package not given.
 remote_arch() {
   ssh -o BatchMode=yes -o ConnectTimeout=8 "$TARGET" 'uname -m' 2>/dev/null || true
 }
@@ -133,7 +116,6 @@ case "$pkg" in
     fi
     ;;
   *.rpm)
-    # Prefer dnf so Requires (ppp, iproute, ...) resolve from base repos.
     if command -v dnf >/dev/null 2>&1; then
       sudo dnf install -y "$pkg" || sudo rpm -Uvh --force "$pkg"
     elif command -v yum >/dev/null 2>&1; then
@@ -154,8 +136,6 @@ sudo systemctl restart vpntoris-native.service 2>/dev/null \
   || sudo systemctl start vpntoris-native.service 2>/dev/null \
   || true
 
-# User-session controller if not already running. Over SSH there is usually
-# no user bus, so fall back to nohup when systemctl --user is unavailable.
 if ! pgrep -x vpntorisd >/dev/null 2>&1; then
   systemctl --user start vpntorisd.service 2>/dev/null \
     || { [[ -x /usr/lib/vpntoris/vpntorisd ]] && nohup /usr/lib/vpntoris/vpntorisd >/tmp/vpntorisd.log 2>&1 & sleep 0.5; }

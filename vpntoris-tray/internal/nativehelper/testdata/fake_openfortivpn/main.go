@@ -10,7 +10,6 @@ import (
 )
 
 func main() {
-	// Consume optional password from stdin like real openfortivpn.
 	go func() { _, _ = io.Copy(io.Discard, os.Stdin) }()
 	fmt.Fprintln(os.Stdout, "INFO: Tunnel established.")
 	fmt.Fprintln(os.Stdout, "INFO: Interface ppp17 is UP.")

@@ -21,8 +21,7 @@ func current() Paths {
 		RuntimeDirectory: runtimeDirectory,
 		LogDirectory:     filepath.Join(root, "Logs"),
 		EngineDirectory:  filepath.Join(root, "Engines"),
-		// Named pipe path used by the future Windows privileged service.
-		HelperSocket: `\\.\pipe\vpntoris-native-helper`,
-		RouterSocket: "",
+		HelperSocket:     `\\.\pipe\vpntoris-native-helper`,
+		RouterSocket:     "",
 	}
 }

@@ -10,7 +10,6 @@ import (
 	"runtime"
 	"testing"
 	"time"
-
 	"vpntoris-tray/internal/fortihelper"
 	"vpntoris-tray/internal/runtimepaths"
 )
@@ -50,9 +49,6 @@ func TestOpenVPNSessionConnectStopResetsRoutes(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(openvpnDir, "manifest.json"), manifestData, 0644); err != nil {
 		t.Fatal(err)
 	}
-
-	// Keep runtime paths short: macOS AF_UNIX sun_path is ~104 bytes and
-	// t.TempDir() under /var/folders/... overflows management socket paths.
 	root, err := os.MkdirTemp("/tmp", "vte")
 	if err != nil {
 		t.Fatal(err)
@@ -61,7 +57,7 @@ func TestOpenVPNSessionConnectStopResetsRoutes(t *testing.T) {
 	router := &recordingRouter{}
 	service, err := New(Config{
 		EngineRoot: engineRoot,
-		UserID:     -1, // skip chown in unprivileged tests
+		UserID:     -1,
 		Router:     router,
 		Paths: runtimepaths.Paths{
 			RuntimeDirectory: filepath.Join(root, "r"),
@@ -74,11 +70,9 @@ func TestOpenVPNSessionConnectStopResetsRoutes(t *testing.T) {
 	if err := service.PrepareRuntime(); err != nil {
 		t.Fatal(err)
 	}
-
 	previousLookup := lookupInterface
 	lookupInterface = func(name string) bool { return name == "tun9" }
 	defer func() { lookupInterface = previousLookup }()
-
 	start := service.Start(fortihelper.Request{
 		Action:   fortihelper.ActionStart,
 		Profile:  "profile-office",
@@ -95,7 +89,6 @@ proto udp
 	if start.State != "connecting" {
 		t.Fatalf("start = %#v", start)
 	}
-
 	deadline := time.Now().Add(8 * time.Second)
 	for time.Now().Before(deadline) {
 		status := service.Status("profile-office")
@@ -116,16 +109,13 @@ proto udp
 	if len(router.added) != 2 {
 		t.Fatalf("expected two routes added, got %#v", router.added)
 	}
-
 	if stop := service.Stop("profile-office"); stop.State != "stopped" {
 		t.Fatalf("stop = %#v", stop)
 	}
-	// Wait for monitor finish to also attempt cleanup.
 	time.Sleep(200 * time.Millisecond)
 	if len(router.deleted) == 0 {
 		t.Fatalf("expected routes to be deleted on stop, got %#v", router.deleted)
 	}
-
 	if reset := service.Reset(); reset.State != "stopped" {
 		t.Fatalf("reset = %#v", reset)
 	}
@@ -133,7 +123,6 @@ proto udp
 		t.Fatalf("status after reset = %#v", got)
 	}
 }
-
 func buildFakeOpenVPN(t *testing.T) string {
 	t.Helper()
 	output := filepath.Join(t.TempDir(), "fake-openvpn")
@@ -146,7 +135,6 @@ func buildFakeOpenVPN(t *testing.T) string {
 	}
 	return output
 }
-
 func fileSHA256(path string) (string, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {

@@ -9,11 +9,9 @@ import (
 )
 
 func TestStoreRoundTrip(t *testing.T) {
-	// On Linux New() uses UserConfigDir; isolate with a temp HOME/XDG.
 	tmp := t.TempDir()
 	t.Setenv("HOME", tmp)
 	t.Setenv("XDG_CONFIG_HOME", filepath.Join(tmp, "config"))
-
 	store := New()
 	if err := store.Write("office", "password", "secret"); err != nil {
 		t.Fatal(err)
@@ -28,7 +26,6 @@ func TestStoreRoundTrip(t *testing.T) {
 	if _, err := store.Read("office", "password"); err == nil {
 		t.Fatal("expected missing credential after delete")
 	}
-	// Ensure we did not leave a world-readable credentials file when using file store.
 	if path := filepath.Join(tmp, "config", "VPNToris", "credentials.json"); fileExists(path) {
 		info, _ := os.Stat(path)
 		if info != nil && info.Mode().Perm()&0o077 != 0 {
@@ -36,7 +33,6 @@ func TestStoreRoundTrip(t *testing.T) {
 		}
 	}
 }
-
 func fileExists(path string) bool {
 	_, err := os.Stat(path)
 	return err == nil

@@ -4,12 +4,9 @@ import (
 	"context"
 	"fmt"
 	"strings"
-
 	"vpntoris-tray/internal/nativeengine"
 )
 
-// MutationBackend adapts a Router to nativeengine.Backend for route mutations.
-// Interface, process and DNS mutations are reserved for later platform work.
 type MutationBackend struct {
 	Router Router
 	DNS    DNSConfigurator
@@ -46,7 +43,6 @@ func (backend MutationBackend) Apply(ctx context.Context, mutation nativeengine.
 		return fmt.Errorf("unsupported mutation kind: %s", mutation.Kind)
 	}
 }
-
 func (backend MutationBackend) Undo(ctx context.Context, mutation nativeengine.Mutation) error {
 	_ = ctx
 	switch mutation.Kind {
@@ -68,7 +64,6 @@ func (backend MutationBackend) Undo(ctx context.Context, mutation nativeengine.M
 		return nil
 	}
 }
-
 func (backend MutationBackend) Owned(ctx context.Context, mutation nativeengine.Mutation) (bool, error) {
 	_ = ctx
 	switch mutation.Kind {
@@ -82,7 +77,6 @@ func (backend MutationBackend) Owned(ctx context.Context, mutation nativeengine.
 		return false, nil
 	}
 }
-
 func splitCSV(value string) []string {
 	raw := strings.Split(value, ",")
 	parts := make([]string, 0, len(raw))

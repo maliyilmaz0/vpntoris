@@ -30,7 +30,6 @@ var rejected = map[string]bool{
 	"up":                      true,
 	"writepid":                true,
 }
-
 var removed = map[string]bool{
 	"auth-user-pass":    true,
 	"block-outside-dns": true,

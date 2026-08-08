@@ -8,8 +8,6 @@ import (
 	"testing"
 )
 
-// fakeSecretTool installs a shell script that mimics the secret-tool CLI
-// contract: secrets via stdin, exit 1 when a lookup/clear finds nothing.
 func fakeSecretTool(t *testing.T) string {
 	t.Helper()
 	dir := t.TempDir()
@@ -50,7 +48,6 @@ esac
 	}
 	return script
 }
-
 func TestSecretToolStoreRoundTrip(t *testing.T) {
 	store := &secretToolStore{binary: fakeSecretTool(t)}
 	if err := store.Write("office", "password", "s3cret"); err != nil {
@@ -60,7 +57,6 @@ func TestSecretToolStoreRoundTrip(t *testing.T) {
 	if err != nil || value != "s3cret" {
 		t.Fatalf("read = %q, %v", value, err)
 	}
-	// Empty value clears the entry.
 	if err := store.Write("office", "password", ""); err != nil {
 		t.Fatal(err)
 	}
@@ -68,11 +64,9 @@ func TestSecretToolStoreRoundTrip(t *testing.T) {
 		t.Fatal("expected missing credential after empty write")
 	}
 }
-
 func TestHybridFallsBackToFile(t *testing.T) {
 	tmp := t.TempDir()
 	t.Setenv("XDG_CONFIG_HOME", filepath.Join(tmp, "config"))
-	// A secret backend whose binary does not exist must fall back to file.
 	hybrid := &hybridStore{
 		secret: &secretToolStore{binary: filepath.Join(tmp, "missing-secret-tool")},
 		file:   newFileStore(),

@@ -4,7 +4,6 @@ import (
 	"context"
 	"path/filepath"
 	"testing"
-
 	"vpntoris-tray/internal/nativeengine"
 )
 
@@ -41,14 +40,12 @@ func TestMutationBackendWithManagerActivatesAndRollsBack(t *testing.T) {
 	if len(router.deleted) != 2 {
 		t.Fatalf("deleted = %#v", router.deleted)
 	}
-	// journal entry should be removed after successful deactivate
 	if entries, listErr := journal.List(); listErr != nil {
 		t.Fatal(listErr)
 	} else if len(entries) != 0 {
 		t.Fatalf("expected empty journal, got %d", len(entries))
 	}
 }
-
 func TestBuildNetworkPlanRejectsDefaultInManagerPath(t *testing.T) {
 	_, err := nativeengine.BuildNetworkPlan(nativeengine.ProfileNetwork{
 		Profile:   "office",

@@ -8,7 +8,6 @@ import (
 	"runtime"
 	"testing"
 	"time"
-
 	"vpntoris-tray/internal/fortihelper"
 	"vpntoris-tray/internal/runtimepaths"
 )
@@ -37,7 +36,6 @@ func TestOpenConnectSessionConnectStop(t *testing.T) {
 		},
 	})
 }
-
 func TestFortiGateSSLSessionConnectStop(t *testing.T) {
 	if testing.Short() {
 		t.Skip("short mode")
@@ -89,7 +87,6 @@ func runProtocolSession(t *testing.T, fixture protocolFixture) {
 		t.Fatal(err)
 	}
 	for _, helper := range fixture.helpers {
-		// Helper only needs to exist and be executable; OpenConnect start checks mode bits.
 		if err := os.WriteFile(filepath.Join(engineDir, "bin", helper), []byte("#!/bin/sh\nexit 0\n"), 0755); err != nil {
 			t.Fatal(err)
 		}
@@ -108,7 +105,6 @@ func runProtocolSession(t *testing.T, fixture protocolFixture) {
 	if err := os.WriteFile(filepath.Join(engineDir, "manifest.json"), manifestData, 0644); err != nil {
 		t.Fatal(err)
 	}
-
 	root, err := os.MkdirTemp("/tmp", "vte")
 	if err != nil {
 		t.Fatal(err)
@@ -133,7 +129,6 @@ func runProtocolSession(t *testing.T, fixture protocolFixture) {
 	previous := lookupInterface
 	lookupInterface = func(name string) bool { return name == fixture.iface }
 	defer func() { lookupInterface = previous }()
-
 	start := service.Start(fixture.request)
 	if start.State != "connecting" && start.State != "waiting-otp" {
 		t.Fatalf("start = %#v", start)
@@ -165,7 +160,6 @@ func runProtocolSession(t *testing.T, fixture protocolFixture) {
 		t.Fatal("expected routes to be deleted")
 	}
 }
-
 func buildFakeEngine(t *testing.T, sourceDir, name string) string {
 	t.Helper()
 	output := filepath.Join(t.TempDir(), name)
@@ -177,4 +171,3 @@ func buildFakeEngine(t *testing.T, sourceDir, name string) string {
 	}
 	return output
 }
-

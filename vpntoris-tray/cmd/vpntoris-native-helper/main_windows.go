@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-
 	"vpntoris-tray/internal/helperipc"
 	"vpntoris-tray/internal/nativehelper"
 	"vpntoris-tray/internal/netbackend"
@@ -50,14 +49,11 @@ func main() {
 	if err := service.PrepareRuntime(); err != nil {
 		fatal(err.Error())
 	}
-	// service mode currently shares the same foreground loop; a future
-	// golang.org/x/sys/windows/svc wrapper can host this entrypoint.
 	_ = mode
 	if err := helperipc.ServePipe(service, paths); err != nil {
 		fatal(err.Error())
 	}
 }
-
 func fatal(message string) {
 	fmt.Fprintln(os.Stderr, message)
 	os.Exit(1)

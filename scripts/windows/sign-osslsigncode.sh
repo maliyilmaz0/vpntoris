@@ -1,26 +1,9 @@
 #!/bin/bash
-# Authenticode-sign Windows PE/MSI on macOS with SafeNet eToken + osslsigncode.
-#
-# Required env (PIN is never stored in repo files):
-#   SAFENET_PIN=...
-#   SIGN_PKCS11_MODULE=/path/to/pkcs11.dylib
-#   SIGN_PKCS11_KEY='pkcs11:token=...;object=...;type=private'
-#   SIGN_CERT_FILE=certs/signing_chain.pem
-# Optional:
-#   SIGN_TIMESTAMP_URL=...
-#   COMPANY_URL=...
-#   PRODUCT_NAME=VPNToris
-#
-# Usage:
-#   SAFENET_PIN=**** ./scripts/windows/sign-osslsigncode.sh path/to.exe [more.exe ...]
-#   SAFENET_PIN=**** ./scripts/windows/sign-osslsigncode.sh --desc "VPNToris Helper" helper.exe
-#
 set -euo pipefail
 
 ROOT_DIR=$(cd "$(dirname "$0")/../.." && pwd)
 if [[ -f "$ROOT_DIR/.env" ]]; then
   set -a
-  # shellcheck disable=SC1091
   source "$ROOT_DIR/.env"
   set +a
 fi

@@ -22,7 +22,6 @@ func TestSanitizePreservesCertificatesAndRemovesRoutes(t *testing.T) {
 		}
 	}
 }
-
 func TestSanitizeRejectsCommandsAndIncludes(t *testing.T) {
 	for _, configuration := range []string{
 		"client\nup /tmp/script\n",
@@ -36,7 +35,6 @@ func TestSanitizeRejectsCommandsAndIncludes(t *testing.T) {
 		}
 	}
 }
-
 func TestSanitizeRejectsTapMode(t *testing.T) {
 	if _, err := Sanitize("client\ndev tap\n"); err == nil {
 		t.Fatal("tap configuration was accepted")

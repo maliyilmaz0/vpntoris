@@ -13,7 +13,6 @@ import (
 	"strconv"
 	"strings"
 	"time"
-
 	"vpntoris-tray/internal/fortihelper"
 	"vpntoris-tray/internal/runtimepaths"
 )
@@ -21,12 +20,10 @@ import (
 func nativeFortiSupported(config VPNConfig) bool {
 	return config.Type == "openfortivpn" && nativeHelperReady()
 }
-
 func nativeHelperReady() bool {
 	info, err := os.Stat(runtimepaths.Current().HelperSocket)
 	return err == nil && info.Mode()&os.ModeSocket != 0
 }
-
 func nativeFortiConnect(config VPNConfig) error {
 	port, err := strconv.Atoi(config.Port)
 	if err != nil {
@@ -82,7 +79,6 @@ func nativeFortiConnect(config VPNConfig) error {
 	}
 	return fmt.Errorf("native VPN tunnel did not become ready before timeout")
 }
-
 func nativeFortiDisconnect(name string) error {
 	response, err := nativeFortiRequest(fortihelper.Request{Action: fortihelper.ActionStop, Profile: nativeProfileID(name)})
 	if err != nil {
@@ -93,7 +89,6 @@ func nativeFortiDisconnect(name string) error {
 	}
 	return nil
 }
-
 func nativeFortiReset() error {
 	response, err := nativeFortiRequest(fortihelper.Request{Action: fortihelper.ActionReset, Profile: "reset"})
 	if err != nil {
@@ -104,7 +99,6 @@ func nativeFortiReset() error {
 	}
 	return nil
 }
-
 func nativeFortiOTP(name, otp string) error {
 	response, err := nativeFortiRequest(fortihelper.Request{Action: fortihelper.ActionOTP, Profile: nativeProfileID(name), OTP: strings.TrimSpace(otp)})
 	if err != nil {
@@ -115,16 +109,13 @@ func nativeFortiOTP(name, otp string) error {
 	}
 	return nil
 }
-
 func nativeFortiStatus(name string) (*fortihelper.Response, error) {
 	return nativeFortiRequest(fortihelper.Request{Action: fortihelper.ActionStatus, Profile: nativeProfileID(name)})
 }
-
 func nativeFortiConnected(name string) bool {
 	response, err := nativeFortiStatus(name)
 	return err == nil && response.State == "connected"
 }
-
 func nativeFortiInterface(name string) string {
 	response, err := nativeFortiStatus(name)
 	if err != nil || response.State != "connected" {
@@ -132,7 +123,6 @@ func nativeFortiInterface(name string) string {
 	}
 	return response.Interface
 }
-
 func nativeFortiLogs(name string) ([]byte, error) {
 	path := runtimepaths.Current().ProfileLog(nativeProfileID(name))
 	data, err := os.ReadFile(path)
@@ -145,7 +135,6 @@ func nativeFortiLogs(name string) ([]byte, error) {
 	}
 	return []byte(strings.Join(lines, "\n")), nil
 }
-
 func nativeFortiTraffic(name string) (uint64, uint64, int64, error) {
 	status, err := nativeFortiStatus(name)
 	if err != nil {
@@ -157,7 +146,6 @@ func nativeFortiTraffic(name string) (uint64, uint64, int64, error) {
 	received, sent, err := readInterfaceCounters(status.Interface)
 	return received, sent, status.Duration, err
 }
-
 func nativeFortiRequest(request fortihelper.Request) (*fortihelper.Response, error) {
 	if err := request.Validate(); err != nil {
 		return nil, err
@@ -176,7 +164,6 @@ func nativeFortiRequest(request fortihelper.Request) (*fortihelper.Response, err
 	}
 	return &response, nil
 }
-
 func nativeGatewayCertificate(host string, port int) (string, error) {
 	dialer := &net.Dialer{Timeout: 5 * time.Second}
 	configuration := &tls.Config{InsecureSkipVerify: true}

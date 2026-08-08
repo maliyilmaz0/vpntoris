@@ -16,7 +16,6 @@ func readInterfaceCounters(interfaceName string) (uint64, uint64, error) {
 	}
 	return parseDarwinInterfaceCounters(string(output), interfaceName)
 }
-
 func parseDarwinInterfaceCounters(output string, interfaceName string) (uint64, uint64, error) {
 	for _, line := range strings.Split(output, "\n") {
 		fields := strings.Fields(line)

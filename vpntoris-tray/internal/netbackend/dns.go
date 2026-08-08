@@ -6,18 +6,13 @@ import (
 	"strings"
 )
 
-// DNSConfigurator applies scoped split-DNS for a VPN session.
 type DNSConfigurator interface {
 	AddScoped(interfaceName string, domain string, servers []string) error
 	RemoveScoped(interfaceName string, domain string) error
 }
-
-// CommandDNS implements DNSConfigurator by invoking platform commands.
 type CommandDNS struct {
-	Run Runner
-	// Add builds the command used to install a scoped domain resolver.
-	Add func(interfaceName, domain string, servers []string) (name string, args []string)
-	// Remove builds the command used to clear a scoped domain resolver.
+	Run    Runner
+	Add    func(interfaceName, domain string, servers []string) (name string, args []string)
 	Remove func(interfaceName, domain string) (name string, args []string)
 }
 
@@ -50,7 +45,6 @@ func (dns CommandDNS) AddScoped(interfaceName, domain string, servers []string) 
 	}
 	return nil
 }
-
 func (dns CommandDNS) RemoveScoped(interfaceName, domain string) error {
 	if dns.Run == nil || dns.Remove == nil || interfaceName == "" || domain == "" {
 		return nil

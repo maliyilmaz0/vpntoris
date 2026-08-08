@@ -2,41 +2,35 @@ package main
 
 import (
 	"fmt"
+	"fyne.io/systray"
 	"sort"
 	"strings"
 	"sync"
 	"time"
-
-	"fyne.io/systray"
-
 	"vpntoris-tray/internal/credentials"
 	"vpntoris-tray/internal/trayclient"
 )
 
 type trayApp struct {
-	client *trayclient.Client
-	store  credentials.Store
-	mu     sync.Mutex
-	items  map[string]*profileMenu
-	status *systray.MenuItem
-	// lastStatus avoids rewriting the disabled status item every tick.
+	client     *trayclient.Client
+	store      credentials.Store
+	mu         sync.Mutex
+	items      map[string]*profileMenu
+	status     *systray.MenuItem
 	lastStatus string
 }
-
 type profileMenu struct {
-	root       *systray.MenuItem
-	connect    *systray.MenuItem
-	disconnect *systray.MenuItem
-	otp        *systray.MenuItem
-	edit       *systray.MenuItem
-	delete     *systray.MenuItem
-	logs       *systray.MenuItem
-	// lastTitle/state avoid SetTitle/Enable on every poll — menu churn closes
-	// open AppIndicator menus on GNOME when the mouse is still over them.
-	lastTitle      string
-	lastConnected  bool
-	lastNeedsOTP   bool
-	stateKnown     bool
+	root          *systray.MenuItem
+	connect       *systray.MenuItem
+	disconnect    *systray.MenuItem
+	otp           *systray.MenuItem
+	edit          *systray.MenuItem
+	delete        *systray.MenuItem
+	logs          *systray.MenuItem
+	lastTitle     string
+	lastConnected bool
+	lastNeedsOTP  bool
+	stateKnown    bool
 }
 
 func newTrayApp() *trayApp {
@@ -46,7 +40,6 @@ func newTrayApp() *trayApp {
 		items:  map[string]*profileMenu{},
 	}
 }
-
 func (app *trayApp) onReady() {
 	systray.SetIcon(minimalPNG)
 	systray.SetTitle("VPNToris")
@@ -61,12 +54,9 @@ func (app *trayApp) onReady() {
 	openDir := systray.AddMenuItem("Open Config Folder", "Open the local VPNToris config directory")
 	systray.AddSeparator()
 	quit := systray.AddMenuItem("Quit", "Quit VPNToris tray")
-
 	go app.loop(addProfile, refresh, reset, openDir, quit)
 }
-
 func (app *trayApp) onExit() {}
-
 func (app *trayApp) loop(addProfile, refresh, reset, openDir, quit *systray.MenuItem) {
 	ticker := time.NewTicker(2 * time.Second)
 	defer ticker.Stop()
@@ -92,8 +82,6 @@ func (app *trayApp) loop(addProfile, refresh, reset, openDir, quit *systray.Menu
 			systray.Quit()
 			return
 		case <-ticker.C:
-			// Never rebuild the menu while a dialog is open or the user is
-			// interacting — GNOME AppIndicator closes the popup on property updates.
 			if dialogBusy.Load() {
 				continue
 			}
@@ -101,12 +89,10 @@ func (app *trayApp) loop(addProfile, refresh, reset, openDir, quit *systray.Menu
 		}
 	}
 }
-
 func (app *trayApp) setStatus(message string) {
 	if app.status == nil {
 		return
 	}
-	// Truncate long errors so the menu stays readable; never include secrets here.
 	if len(message) > 80 {
 		message = message[:77] + "..."
 	}
@@ -117,7 +103,6 @@ func (app *trayApp) setStatus(message string) {
 	app.lastStatus = title
 	app.status.SetTitle(title)
 }
-
 func (app *trayApp) refreshProfiles() {
 	if dialogBusy.Load() {
 		return
@@ -149,7 +134,6 @@ func (app *trayApp) refreshProfiles() {
 	app.mu.Unlock()
 	app.setStatus(fmt.Sprintf("%d profile(s), %d connected", len(profiles), connected))
 }
-
 func (app *trayApp) ensureProfileMenu(profile trayclient.Profile) {
 	app.mu.Lock()
 	defer app.mu.Unlock()
@@ -204,11 +188,7 @@ func (app *trayApp) ensureProfileMenu(profile trayclient.Profile) {
 		}
 	}()
 }
-
 func (app *trayApp) updateProfileMenu(profile trayclient.Profile) {
-	// refreshProfiles runs on several goroutines (ticker loop + click
-	// handlers); serialize menu state mutations against each other and
-	// against handleDeleteProfile.
 	app.mu.Lock()
 	defer app.mu.Unlock()
 	item := app.items[profile.Name]
@@ -226,7 +206,6 @@ func (app *trayApp) updateProfileMenu(profile trayclient.Profile) {
 	if profile.RouteStatus != "" {
 		title += " (" + profile.RouteStatus + ")"
 	}
-	// Only push D-Bus property updates when something actually changed.
 	if !item.stateKnown || item.lastTitle != title {
 		item.lastTitle = title
 		item.root.SetTitle(title)
@@ -251,7 +230,6 @@ func (app *trayApp) updateProfileMenu(profile trayclient.Profile) {
 	}
 	item.stateKnown = true
 }
-
 func (app *trayApp) handleAddProfile() {
 	config, _, err := editProfileForm(nil)
 	if err != nil {
@@ -262,7 +240,6 @@ func (app *trayApp) handleAddProfile() {
 	}
 	app.persistAndSave("", config)
 }
-
 func (app *trayApp) handleEditProfile(name string) {
 	existing, err := app.client.ProfileConfig(name)
 	if err != nil {
@@ -281,14 +258,12 @@ func (app *trayApp) handleEditProfile(name string) {
 	}
 	app.persistAndSave(replace, config)
 }
-
 func (app *trayApp) persistAndSave(replace string, config trayclient.ProfileConfig) {
 	password := config.Password
 	psk := ""
 	if config.IPSec != nil {
 		psk = config.IPSec.PreSharedKey
 	}
-	// Keep existing secrets when the form left them blank.
 	if password == "" {
 		if stored, err := app.store.Read(firstNonEmpty(replace, config.Name), "password"); err == nil {
 			password = stored
@@ -299,9 +274,8 @@ func (app *trayApp) persistAndSave(replace string, config trayclient.ProfileConf
 			psk = stored
 		}
 	}
-	// Controller strips secrets from disk; we keep them only in the credential store.
 	toSave := config
-	toSave.Password = password // sent once; controller drops before write
+	toSave.Password = password
 	if toSave.Type == "ipsec" {
 		if toSave.IPSec == nil {
 			toSave.IPSec = trayclient.DefaultIPSec()
@@ -322,7 +296,6 @@ func (app *trayApp) persistAndSave(replace string, config trayclient.ProfileConf
 	app.setStatus(config.Name + ": saved")
 	app.refreshProfiles()
 }
-
 func (app *trayApp) handleDeleteProfile(name string) {
 	if !promptConfirm("VPNToris", "Delete profile “"+name+"”? This cannot be undone.") {
 		app.setStatus(name + ": delete cancelled")
@@ -336,7 +309,6 @@ func (app *trayApp) handleDeleteProfile(name string) {
 	_ = app.store.Delete(name)
 	app.mu.Lock()
 	if item, ok := app.items[name]; ok {
-		// Some AppIndicator hosts ignore Hide(); disable + retitle as fallback.
 		item.root.SetTitle("(deleted) " + name)
 		item.root.Disable()
 		item.connect.Disable()
@@ -350,12 +322,9 @@ func (app *trayApp) handleDeleteProfile(name string) {
 	}
 	app.mu.Unlock()
 	app.setStatus(name + ": deleted")
-	// Force a full refresh so the list matches disk (and re-hides ghosts).
 	app.refreshProfiles()
 }
-
 func (app *trayApp) handleLogs(name string) {
-	// Fetch logs first (no dialog), then open a durable window after the menu closes.
 	logs, err := app.client.Logs(name)
 	if err != nil {
 		app.setStatus(name + ": " + err.Error())
@@ -367,7 +336,6 @@ func (app *trayApp) handleLogs(name string) {
 	}
 	showTextDialog("VPNToris — "+name+" logs", logs)
 }
-
 func (app *trayApp) handleConnect(name string) {
 	password, _ := app.store.Read(name, "password")
 	psk, _ := app.store.Read(name, "psk")
@@ -387,7 +355,6 @@ func (app *trayApp) handleConnect(name string) {
 	app.setStatus(name + ": connecting")
 	app.refreshProfiles()
 }
-
 func (app *trayApp) handleOTP(name string) {
 	otp, err := promptSecret("VPNToris OTP", "One-time password for "+name)
 	if err != nil || otp == "" {

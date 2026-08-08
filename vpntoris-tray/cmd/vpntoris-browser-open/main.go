@@ -17,7 +17,6 @@ func main() {
 		fatal(err.Error())
 	}
 }
-
 func allowedBrowserURL(value string) bool {
 	parsed, err := url.Parse(value)
 	if err != nil || parsed.User != nil || parsed.Hostname() == "" {
@@ -28,7 +27,6 @@ func allowedBrowserURL(value string) bool {
 	}
 	return parsed.Scheme == "http" && net.ParseIP(parsed.Hostname()) != nil && net.ParseIP(parsed.Hostname()).IsLoopback()
 }
-
 func fatal(message string) {
 	fmt.Fprintln(os.Stderr, message)
 	os.Exit(1)

@@ -79,7 +79,6 @@ func LoadEngineManifest(root, manifestPath string) (*EngineManifest, string, err
 	}
 	return &manifest, resolvedExecutable, nil
 }
-
 func resolveBundleFile(root, relativePath string) (string, error) {
 	if relativePath == "" || filepath.IsAbs(relativePath) {
 		return "", fmt.Errorf("invalid engine asset path")
@@ -94,7 +93,6 @@ func resolveBundleFile(root, relativePath string) (string, error) {
 	}
 	return path, nil
 }
-
 func fileSHA256(path string) (string, error) {
 	file, err := os.Open(path)
 	if err != nil {

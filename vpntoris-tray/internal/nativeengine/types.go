@@ -32,7 +32,6 @@ type Mutation struct {
 	Values    map[string]string `json:"values,omitempty"`
 	Error     string            `json:"error,omitempty"`
 }
-
 type TransactionState string
 
 const (
@@ -53,7 +52,6 @@ type Transaction struct {
 	UpdatedAt time.Time        `json:"updatedAt"`
 	Mutations []Mutation       `json:"mutations"`
 }
-
 type Plan struct {
 	Profile   string
 	Mutations []Mutation

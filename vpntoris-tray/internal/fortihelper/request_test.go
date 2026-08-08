@@ -21,7 +21,6 @@ func TestStartRequestIsStrictlyScoped(t *testing.T) {
 		}
 	}
 }
-
 func TestStartRequestRejectsUnsafeValues(t *testing.T) {
 	tests := []Request{
 		{Action: ActionStart, Profile: "Invalid Profile", Host: "vpn.example.invalid", Port: 443, Username: "test-user", Password: "test-password", Routes: []string{"198.51.100.42/32"}},
@@ -36,7 +35,6 @@ func TestStartRequestRejectsUnsafeValues(t *testing.T) {
 		}
 	}
 }
-
 func TestOTPRequestDoesNotAcceptLineInjection(t *testing.T) {
 	if err := (Request{Action: ActionOTP, Profile: "test-profile", OTP: "123456"}).Validate(); err != nil {
 		t.Fatal(err)
@@ -45,21 +43,18 @@ func TestOTPRequestDoesNotAcceptLineInjection(t *testing.T) {
 		t.Fatal("accepted line injection")
 	}
 }
-
 func TestOpenVPNStartAcceptsSanitizedConfiguration(t *testing.T) {
 	request := Request{Action: ActionStart, Profile: "test-profile", Protocol: ProtocolOpenVPN, Configuration: "client\ndev tun\nremote vpn.example.invalid 1194\n", Username: "test-user", Password: "test-password", Routes: []string{"198.51.100.42/32"}}
 	if err := request.Validate(); err != nil {
 		t.Fatal(err)
 	}
 }
-
 func TestOpenVPNStartRejectsExecutableConfiguration(t *testing.T) {
 	request := Request{Action: ActionStart, Profile: "test-profile", Protocol: ProtocolOpenVPN, Configuration: "client\ndev tun\nremote vpn.example.invalid 1194\nup /tmp/script\n", Routes: []string{"198.51.100.42/32"}}
 	if err := request.Validate(); err == nil {
 		t.Fatal("accepted executable OpenVPN configuration")
 	}
 }
-
 func TestOpenConnectStartValidatesGatewayProtocol(t *testing.T) {
 	request := Request{Action: ActionStart, Profile: "test-profile", Protocol: ProtocolOpenConnect, GatewayProtocol: "gp", Host: "vpn.example.invalid", Port: 443, Username: "test-user", Password: "test-password", Routes: []string{"198.51.100.42/32"}}
 	if err := request.Validate(); err != nil {
@@ -70,14 +65,12 @@ func TestOpenConnectStartValidatesGatewayProtocol(t *testing.T) {
 		t.Fatal("accepted unsupported OpenConnect protocol")
 	}
 }
-
 func TestOpenConnectBrowserAuthenticationDoesNotRequireStoredCredentials(t *testing.T) {
 	request := Request{Action: ActionStart, Profile: "test-profile", Protocol: ProtocolOpenConnect, GatewayProtocol: "gp", ExternalBrowser: true, Host: "vpn.example.invalid", Port: 443, Routes: []string{"198.51.100.42/32"}}
 	if err := request.Validate(); err != nil {
 		t.Fatal(err)
 	}
 }
-
 func TestIPSecConfigurationPreservesExplicitSHA1AndDH20(t *testing.T) {
 	request := Request{
 		Action: ActionStart, Profile: "test-profile", Protocol: ProtocolIPSec,
@@ -106,7 +99,6 @@ func TestIPSecConfigurationPreservesExplicitSHA1AndDH20(t *testing.T) {
 		t.Fatal("IPsec configuration replaced split routes with a default route")
 	}
 }
-
 func TestIPSecRequestRejectsConfigurationInjection(t *testing.T) {
 	base := Request{
 		Action: ActionStart, Profile: "test-profile", Protocol: ProtocolIPSec,
@@ -133,7 +125,6 @@ func TestIPSecRequestRejectsConfigurationInjection(t *testing.T) {
 		t.Fatal("accepted an injected IPsec proposal")
 	}
 }
-
 func TestIPSecRequestAllowsQuotedCredentials(t *testing.T) {
 	request := Request{
 		Action: ActionStart, Profile: "test-profile", Protocol: ProtocolIPSec,

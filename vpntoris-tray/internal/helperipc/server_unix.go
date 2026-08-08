@@ -12,30 +12,15 @@ import (
 	"strconv"
 	"strings"
 	"sync"
-
 	"vpntoris-tray/internal/fortihelper"
 	"vpntoris-tray/internal/nativehelper"
 	"vpntoris-tray/internal/runtimepaths"
 )
 
-// AllowedUsersPath lists the local uids allowed to drive the root helper when
-// the socket cannot be owned by a single desktop user (Linux systemd installs,
-// where the helper starts before any user session exists). Package postinst
-// scripts record the installing desktop user here.
 const AllowedUsersPath = "/etc/vpntoris/helper-users.conf"
 
 var warnAllowAllOnce sync.Once
 
-// ServeUnix starts a Unix-domain control socket for the helper service.
-//
-// Access model:
-//   - uid > 0 (macOS LaunchDaemon passes the console user): the socket is
-//     chowned to that uid with mode 0660, so only root and the desktop user
-//     can connect.
-//   - uid == 0 (Linux systemd): the socket stays root:root 0666, but every
-//     connection is checked via SO_PEERCRED against AllowedUsersPath. When
-//     the allow file is absent (dev setups) all local users are accepted and
-//     a warning is logged once.
 func ServeUnix(service *nativehelper.Service, paths runtimepaths.Paths, uid int) error {
 	socketPath := paths.HelperSocket
 	if err := os.MkdirAll(filepath.Dir(socketPath), 0755); err != nil {
@@ -73,15 +58,9 @@ func ServeUnix(service *nativehelper.Service, paths runtimepaths.Paths, uid int)
 		go handle(service, connection)
 	}
 }
-
-// peerAllowed reports whether the connecting peer may issue helper requests.
-// Root is always allowed; other uids must appear in AllowedUsersPath. A
-// missing/unreadable allow file keeps legacy behaviour (allow all) so dev and
-// smoke setups keep working, with a single warning.
 func peerAllowed(connection net.Conn) bool {
 	peerUID, err := peerCredentialsUID(connection)
 	if err != nil {
-		// Cannot identify the peer: fail closed.
 		log.Printf("helper: rejecting connection, peer credentials unavailable: %v", err)
 		return false
 	}
@@ -101,9 +80,6 @@ func peerAllowed(connection net.Conn) bool {
 	}
 	return true
 }
-
-// loadAllowedUsers parses AllowedUsersPath (one uid per line, # comments).
-// Read per connection so postinst updates apply without a helper restart.
 func loadAllowedUsers() (map[uint32]bool, error) {
 	file, err := os.Open(AllowedUsersPath)
 	if err != nil {
@@ -125,7 +101,6 @@ func loadAllowedUsers() (map[uint32]bool, error) {
 	}
 	return allowed, scanner.Err()
 }
-
 func handle(service *nativehelper.Service, connection net.Conn) {
 	defer connection.Close()
 	decoder := json.NewDecoder(connection)

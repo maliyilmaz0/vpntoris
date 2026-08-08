@@ -5,7 +5,6 @@ package main
 import (
 	"archive/zip"
 	"os/exec"
-
 	"vpntoris-tray/internal/runtimepaths"
 )
 

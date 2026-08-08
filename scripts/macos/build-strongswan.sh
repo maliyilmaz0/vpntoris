@@ -115,9 +115,6 @@ actual_source=$(shasum -a 256 "$source_archive" | awk '{print $1}')
 [[ "$actual_source" == "$source_sha256" ]] || { echo "strongSwan source digest mismatch" >&2; exit 1; }
 tar -xOf "$source_archive" "strongswan-$version/COPYING" > "$output_root/licenses/strongswan.txt"
 
-# Rebuild xauth-generic from the pinned source with VPNToris' interactive
-# XAuth OTP transport. The Homebrew bottle contains the stock plugin, which
-# can only read a static credential and cannot pause for a 2FA code.
 source_build="$work_root/source-build"
 mkdir -p "$source_build"
 tar -xf "$source_archive" -C "$source_build"

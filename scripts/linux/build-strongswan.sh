@@ -1,7 +1,6 @@
 #!/bin/bash
 set -euo pipefail
 
-# Packages strongSwan charon/swanctl for Linux with kernel-netlink plugins.
 ROOT_DIR=$(cd "$(dirname "$0")/../.." && pwd)
 GOARCH=${GOARCH:-amd64}
 case "$GOARCH" in
@@ -32,7 +31,6 @@ set -euo pipefail
 export DEBIAN_FRONTEND=noninteractive
 apt-get update
 apt-get install -y --no-install-recommends strongswan strongswan-charon strongswan-swanctl libstrongswan libstrongswan-standard-plugins libstrongswan-extra-plugins ca-certificates python3
-# Locate binaries across Debian layout variants.
 CHARON=$(command -v charon || true)
 SWANCTL=$(command -v swanctl || true)
 if [[ -z "$CHARON" ]]; then
@@ -49,7 +47,6 @@ test -n "$CHARON" && test -n "$SWANCTL"
 cp "$CHARON" /out/bin/charon
 cp "$SWANCTL" /out/bin/swanctl
 chmod 755 /out/bin/charon /out/bin/swanctl
-# Collect plugins commonly required for IKE/XAuth/EAP.
 for dir in /usr/lib/ipsec/plugins /usr/lib/strongswan/plugins /usr/lib/*/strongswan/plugins; do
   if [[ -d "$dir" ]]; then
     cp -a "$dir"/. /out/plugins/ || true

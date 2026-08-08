@@ -10,7 +10,6 @@ type Backend interface {
 	Undo(context.Context, Mutation) error
 	Owned(context.Context, Mutation) (bool, error)
 }
-
 type Manager struct {
 	journal *Journal
 	backend Backend
@@ -22,7 +21,6 @@ func NewManager(journal *Journal, backend Backend) (*Manager, error) {
 	}
 	return &Manager{journal: journal, backend: backend}, nil
 }
-
 func (manager *Manager) Activate(ctx context.Context, plan Plan) (*Transaction, error) {
 	transaction, err := manager.journal.Begin(plan.Profile)
 	if err != nil {
@@ -58,14 +56,12 @@ func (manager *Manager) Activate(ctx context.Context, plan Plan) (*Transaction, 
 	}
 	return transaction, nil
 }
-
 func (manager *Manager) Deactivate(ctx context.Context, transaction *Transaction) error {
 	if transaction == nil {
 		return fmt.Errorf("transaction is required")
 	}
 	return manager.rollback(ctx, transaction, nil)
 }
-
 func (manager *Manager) Recover(ctx context.Context) error {
 	transactions, err := manager.journal.List()
 	if err != nil {
@@ -79,7 +75,6 @@ func (manager *Manager) Recover(ctx context.Context) error {
 	}
 	return recoveryError
 }
-
 func (manager *Manager) rollback(ctx context.Context, transaction *Transaction, cause error) error {
 	transaction.State = TransactionRollingBack
 	_ = manager.journal.Save(transaction)

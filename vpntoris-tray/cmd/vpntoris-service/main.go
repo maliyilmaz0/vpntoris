@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-
 	"vpntoris-tray/internal/nativeengine"
 	"vpntoris-tray/internal/netbackend"
 	"vpntoris-tray/internal/platforminfo"
@@ -44,7 +43,6 @@ func main() {
 		fatal("unknown command")
 	}
 }
-
 func repair(paths runtimepaths.Paths) error {
 	journal, err := nativeengine.NewJournal(paths.StateDirectory, owner)
 	if err != nil {
@@ -57,7 +55,6 @@ func repair(paths runtimepaths.Paths) error {
 	}
 	return manager.Recover(context.Background())
 }
-
 func writeJSON(value any) {
 	encoder := json.NewEncoder(os.Stdout)
 	encoder.SetIndent("", "  ")
@@ -65,7 +62,6 @@ func writeJSON(value any) {
 		fatal(err.Error())
 	}
 }
-
 func fatal(message string) {
 	fmt.Fprintln(os.Stderr, message)
 	os.Exit(1)

@@ -15,21 +15,14 @@ import (
 	"time"
 )
 
-// New returns the best available Linux secret store: the desktop Secret
-// Service (gnome-keyring / KWallet) via the secret-tool CLI when available,
-// otherwise a 0600 file under the user config directory.
 func New() Store {
 	file := newFileStore()
 	if secretToolAvailable() {
-		// Hybrid: prefer the Secret Service, fall back to the file so a
-		// locked/missing keyring never loses or blocks secrets.
 		return &hybridStore{secret: &secretToolStore{}, file: file}
 	}
 	return file
 }
 
-// fileStore persists non-profile secrets under the user config directory.
-// Values are never logged by the tray; file mode is 0600.
 type fileStore struct {
 	mu   sync.Mutex
 	path string
@@ -45,7 +38,6 @@ func newFileStore() *fileStore {
 	_ = os.MkdirAll(dir, 0700)
 	return &fileStore{path: filepath.Join(dir, "credentials.json")}
 }
-
 func (store *fileStore) Write(profile, field, value string) error {
 	store.mu.Lock()
 	defer store.mu.Unlock()
@@ -61,7 +53,6 @@ func (store *fileStore) Write(profile, field, value string) error {
 	}
 	return store.save(data)
 }
-
 func (store *fileStore) Read(profile, field string) (string, error) {
 	store.mu.Lock()
 	defer store.mu.Unlock()
@@ -75,7 +66,6 @@ func (store *fileStore) Read(profile, field string) (string, error) {
 	}
 	return value, nil
 }
-
 func (store *fileStore) Delete(profile string) error {
 	store.mu.Lock()
 	defer store.mu.Unlock()
@@ -91,7 +81,6 @@ func (store *fileStore) Delete(profile string) error {
 	}
 	return store.save(data)
 }
-
 func (store *fileStore) load() (map[string]string, error) {
 	raw, err := os.ReadFile(store.path)
 	if os.IsNotExist(err) {
@@ -102,8 +91,6 @@ func (store *fileStore) load() (map[string]string, error) {
 	}
 	var data map[string]string
 	if err := json.Unmarshal(raw, &data); err != nil {
-		// A corrupted file must surface an error; returning an empty map
-		// here would make the next Write/Delete wipe all stored secrets.
 		return nil, err
 	}
 	if data == nil {
@@ -111,7 +98,6 @@ func (store *fileStore) load() (map[string]string, error) {
 	}
 	return data, nil
 }
-
 func (store *fileStore) save(data map[string]string) error {
 	if err := os.MkdirAll(filepath.Dir(store.path), 0700); err != nil {
 		return err
@@ -127,11 +113,7 @@ func (store *fileStore) save(data map[string]string) error {
 	return os.Rename(tmp, store.path)
 }
 
-// secretToolStore talks to the freedesktop Secret Service (gnome-keyring,
-// KWallet, …) through the secret-tool CLI. Secrets travel via stdin/stdout,
-// never via process arguments.
 type secretToolStore struct {
-	// binary locates secret-tool; empty means PATH lookup.
 	binary string
 }
 
@@ -139,9 +121,6 @@ const secretToolTimeout = 5 * time.Second
 
 var errSecretNotFound = errors.New("secret not found")
 
-// secretToolAvailable reports whether secret-tool exists and a Secret Service
-// daemon answers. A lookup for a certainly-missing key exits 1 when the
-// service responds but has no match; other failures mean no usable service.
 func secretToolAvailable() bool {
 	path, err := exec.LookPath("secret-tool")
 	if err != nil {
@@ -150,7 +129,6 @@ func secretToolAvailable() bool {
 	_, err = (&secretToolStore{binary: path}).lookup("vpntoris-probe", "vpntoris-probe")
 	return err == nil || errors.Is(err, errSecretNotFound)
 }
-
 func (store *secretToolStore) run(input string, args ...string) (string, error) {
 	binary := store.binary
 	if binary == "" {
@@ -172,11 +150,9 @@ func (store *secretToolStore) run(input string, args ...string) (string, error) 
 	}
 	return strings.TrimSuffix(string(output), "\n"), nil
 }
-
 func (store *secretToolStore) lookup(profile, field string) (string, error) {
 	return store.run("", "lookup", "service", "vpntoris", "profile", profile, "field", field)
 }
-
 func (store *secretToolStore) Write(profile, field, value string) error {
 	if strings.TrimSpace(value) == "" {
 		_, err := store.run("", "clear", "service", "vpntoris", "profile", profile, "field", field)
@@ -189,11 +165,9 @@ func (store *secretToolStore) Write(profile, field, value string) error {
 		"service", "vpntoris", "profile", profile, "field", field)
 	return err
 }
-
 func (store *secretToolStore) Read(profile, field string) (string, error) {
 	return store.lookup(profile, field)
 }
-
 func (store *secretToolStore) Delete(profile string) error {
 	_, err := store.run("", "clear", "service", "vpntoris", "profile", profile)
 	if errors.Is(err, errSecretNotFound) {
@@ -202,9 +176,6 @@ func (store *secretToolStore) Delete(profile string) error {
 	return err
 }
 
-// hybridStore prefers the Secret Service and falls back to the file store on
-// any error, so a locked keyring never blocks connect. Reads try both, which
-// also migrates secrets written by either backend.
 type hybridStore struct {
 	secret *secretToolStore
 	file   *fileStore
@@ -216,16 +187,13 @@ func (store *hybridStore) Write(profile, field, value string) error {
 	}
 	return store.file.Write(profile, field, value)
 }
-
 func (store *hybridStore) Read(profile, field string) (string, error) {
 	if value, err := store.secret.Read(profile, field); err == nil {
 		return value, nil
 	}
 	return store.file.Read(profile, field)
 }
-
 func (store *hybridStore) Delete(profile string) error {
-	// Best effort on both backends; only fail when neither worked.
 	errSecret := store.secret.Delete(profile)
 	errFile := store.file.Delete(profile)
 	if errSecret != nil && errFile != nil {

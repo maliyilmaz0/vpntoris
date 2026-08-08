@@ -34,7 +34,6 @@ func NewJournal(directory, owner string) (*Journal, error) {
 	}
 	return &Journal{directory: directory, owner: owner}, nil
 }
-
 func (journal *Journal) Begin(profile string) (*Transaction, error) {
 	if profile == "" || len(profile) > 160 {
 		return nil, fmt.Errorf("invalid profile")
@@ -50,13 +49,11 @@ func (journal *Journal) Begin(profile string) (*Transaction, error) {
 	}
 	return transaction, nil
 }
-
 func (journal *Journal) Save(transaction *Transaction) error {
 	journal.mu.Lock()
 	defer journal.mu.Unlock()
 	return journal.saveLocked(transaction)
 }
-
 func (journal *Journal) saveLocked(transaction *Transaction) error {
 	if err := journal.validate(transaction); err != nil {
 		return err
@@ -98,7 +95,6 @@ func (journal *Journal) saveLocked(transaction *Transaction) error {
 	}
 	return err
 }
-
 func (journal *Journal) Load(id string) (*Transaction, error) {
 	journal.mu.Lock()
 	defer journal.mu.Unlock()
@@ -107,7 +103,6 @@ func (journal *Journal) Load(id string) (*Transaction, error) {
 	}
 	return journal.loadLocked(journal.path(id))
 }
-
 func (journal *Journal) List() ([]*Transaction, error) {
 	journal.mu.Lock()
 	defer journal.mu.Unlock()
@@ -129,7 +124,6 @@ func (journal *Journal) List() ([]*Transaction, error) {
 	sort.Slice(transactions, func(i, k int) bool { return transactions[i].CreatedAt.Before(transactions[k].CreatedAt) })
 	return transactions, nil
 }
-
 func (journal *Journal) Remove(id string) error {
 	journal.mu.Lock()
 	defer journal.mu.Unlock()
@@ -142,7 +136,6 @@ func (journal *Journal) Remove(id string) error {
 	}
 	return err
 }
-
 func (journal *Journal) loadLocked(path string) (*Transaction, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -157,18 +150,15 @@ func (journal *Journal) loadLocked(path string) (*Transaction, error) {
 	}
 	return &transaction, nil
 }
-
 func (journal *Journal) validate(transaction *Transaction) error {
 	if transaction == nil || transaction.Version != 1 || !safeIdentifier.MatchString(transaction.ID) || transaction.Owner != journal.owner || transaction.Profile == "" || transaction.Platform == "" {
 		return fmt.Errorf("invalid transaction")
 	}
 	return nil
 }
-
 func (journal *Journal) path(id string) string {
 	return filepath.Join(journal.directory, id+".json")
 }
-
 func randomIdentifier() (string, error) {
 	data := make([]byte, 16)
 	if _, err := rand.Read(data); err != nil {

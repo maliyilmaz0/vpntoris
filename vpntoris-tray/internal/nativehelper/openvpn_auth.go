@@ -11,7 +11,6 @@ func writeManagementCredentials(connection net.Conn, username string, password s
 	_, err := fmt.Fprintf(connection, "username \"Auth\" \"%s\"\npassword \"Auth\" \"%s\"\n", managementEscape(username), managementEscape(password))
 	return err
 }
-
 func openVPNChallengeCredentials(challenge string, state string, username string, password string, otp string) (string, string) {
 	switch challenge {
 	case "static":
@@ -23,7 +22,6 @@ func openVPNChallengeCredentials(challenge string, state string, username string
 	}
 	return username, password
 }
-
 func managementEscape(value string) string {
 	value = strings.ReplaceAll(value, `\`, `\\`)
 	return strings.ReplaceAll(value, `"`, `\"`)

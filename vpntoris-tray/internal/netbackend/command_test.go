@@ -39,7 +39,6 @@ func TestCommandRouterAddsAndDeletesInOrder(t *testing.T) {
 		}
 	}
 }
-
 func TestCommandRouterRejectsDefaultRoute(t *testing.T) {
 	router := commandRouter{
 		run: func(string, ...string) ([]byte, error) {
@@ -57,7 +56,6 @@ func TestCommandRouterRejectsDefaultRoute(t *testing.T) {
 		t.Fatal("expected default route rejection")
 	}
 }
-
 func TestCommandRouterRollsBackOnFailure(t *testing.T) {
 	var calls []string
 	router := commandRouter{
@@ -80,12 +78,10 @@ func TestCommandRouterRollsBackOnFailure(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected failure")
 	}
-	// first add succeeds, second fails, then first is deleted
 	if len(calls) < 3 || !strings.Contains(calls[2], "del 10.38.0.0/16") {
 		t.Fatalf("expected rollback delete, got %#v", calls)
 	}
 }
-
 func TestCommandRouterRequiresInterface(t *testing.T) {
 	router := commandRouter{
 		run: func(string, ...string) ([]byte, error) { return nil, nil },
@@ -95,7 +91,6 @@ func TestCommandRouterRequiresInterface(t *testing.T) {
 		t.Fatal("expected missing interface error")
 	}
 }
-
 func TestValidateRouteCIDR(t *testing.T) {
 	if err := validateRouteCIDR("10.0.0.0/8"); err != nil {
 		t.Fatal(err)

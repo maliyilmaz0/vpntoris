@@ -12,28 +12,19 @@ import (
 	"time"
 )
 
-// dialogBusy blocks menu refresh while a modal window is open so AppIndicator
-// hosts do not rebuild/dismiss the tray menu (or kill the dialog) mid-action.
 var dialogBusy atomic.Bool
 
 func withDialog(fn func()) {
 	dialogBusy.Store(true)
 	defer dialogBusy.Store(false)
-	// Let the StatusNotifier menu finish closing before stealing focus.
-	// GNOME AppIndicator otherwise races the dialog and kills it instantly.
 	if runtime.GOOS == "linux" {
 		time.Sleep(250 * time.Millisecond)
 	}
 	fn()
 }
 
-// dialogTimeout bounds how long a helper dialog process may run; a hung
-// zenity/kdialog must not wedge the tray forever (dialogBusy stays set and
-// the refresh loop stalls).
 const dialogTimeout = 5 * time.Minute
 
-// runDialog runs a dialog helper process with the desktop environment and a
-// hard timeout.
 func runDialog(name string, args ...string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), dialogTimeout)
 	defer cancel()
@@ -41,7 +32,6 @@ func runDialog(name string, args ...string) error {
 	cmd.Env = desktopEnv()
 	return cmd.Run()
 }
-
 func desktopEnv() []string {
 	env := os.Environ()
 	hasDisplay := false
@@ -56,7 +46,6 @@ func desktopEnv() []string {
 	}
 	return env
 }
-
 func showTextDialog(title, text string) {
 	if len(text) > 200000 {
 		text = text[:200000] + "\n…(truncated)"
@@ -67,7 +56,6 @@ func showTextDialog(title, text string) {
 			if gtkShowText(title, text) == nil {
 				return
 			}
-			// Fallback: write file, run zenity with full env, delete after exit.
 			tmp, err := os.CreateTemp("", "vpntoris-log-*.txt")
 			if err != nil {
 				return
@@ -92,7 +80,6 @@ func showTextDialog(title, text string) {
 		}
 	})
 }
-
 func gtkShowText(title, text string) error {
 	if runtime.GOOS != "linux" {
 		return fmt.Errorf("not linux")
@@ -109,7 +96,6 @@ func gtkShowText(title, text string) error {
 	}
 	tmp.Close()
 	defer os.Remove(path)
-
 	script := `#!/usr/bin/env python3
 import sys
 import gi
@@ -184,17 +170,14 @@ Gtk.main()
 	py.Close()
 	defer os.Remove(scriptPath)
 	_ = os.Chmod(scriptPath, 0700)
-
 	return runDialog("python3", scriptPath, title, path)
 }
-
 func truncate(value string, max int) string {
 	if len(value) <= max {
 		return value
 	}
 	return value[:max] + "…"
 }
-
 func openConfigDir() {
 	withDialog(func() {
 		dir, err := os.UserConfigDir()

@@ -4,7 +4,6 @@ import (
 	"context"
 	"strings"
 	"testing"
-
 	"vpntoris-tray/internal/nativeengine"
 )
 
@@ -23,13 +22,11 @@ func (router *memoryRouter) AddRoutes(interfaceName string, routes []string) err
 	}
 	return nil
 }
-
 func (router *memoryRouter) DeleteRoutes(interfaceName string, routes []string) {
 	for _, route := range routes {
 		router.deleted = append(router.deleted, interfaceName+":"+route)
 	}
 }
-
 func TestMutationBackendAppliesAndUndoesRoutes(t *testing.T) {
 	router := &memoryRouter{}
 	backend := MutationBackend{Router: router}
@@ -51,7 +48,6 @@ func TestMutationBackendAppliesAndUndoesRoutes(t *testing.T) {
 		t.Fatalf("unexpected deleted routes: %#v", router.deleted)
 	}
 }
-
 func TestMutationBackendRejectsIncompleteRoute(t *testing.T) {
 	backend := MutationBackend{Router: &memoryRouter{}}
 	if err := backend.Apply(context.Background(), nativeengine.Mutation{Kind: nativeengine.MutationRoute, Interface: "utun12"}); err == nil {
@@ -68,12 +64,10 @@ func (dns *memoryDNS) AddScoped(interfaceName, domain string, servers []string) 
 	dns.added = append(dns.added, interfaceName+":"+domain+":"+strings.Join(servers, ","))
 	return nil
 }
-
 func (dns *memoryDNS) RemoveScoped(interfaceName, domain string) error {
 	dns.removed = append(dns.removed, interfaceName+":"+domain)
 	return nil
 }
-
 func TestMutationBackendAppliesDNS(t *testing.T) {
 	dns := &memoryDNS{}
 	backend := MutationBackend{Router: &memoryRouter{}, DNS: dns}

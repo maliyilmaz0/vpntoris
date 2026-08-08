@@ -28,7 +28,6 @@ func TestCommandDNSAddScopedValidatesInput(t *testing.T) {
 		t.Fatal("expected invalid server error")
 	}
 }
-
 func TestCommandDNSAddScopedBuildsCommand(t *testing.T) {
 	var calls []string
 	dns := CommandDNS{

@@ -1,16 +1,6 @@
 #!/bin/bash
 set -euo pipefail
 
-# Linux native OpenVPN smoke test.
-# Runs inside a privileged container with /dev/net/tun and NET_ADMIN:
-#   1. Builds linux helper + controller + fake openvpn engine package
-#   2. Starts vpntoris-native-helper
-#   3. Starts an OpenVPN session via the helper socket
-#   4. Asserts routes are installed, then stop/reset clean them up
-#
-# Usage (from repo root, on a host with Docker):
-#   ./scripts/linux/smoke-native-openvpn.sh
-
 ROOT_DIR=$(cd "$(dirname "$0")/../.." && pwd)
 GOARCH=${GOARCH:-amd64}
 IMAGE=${IMAGE:-golang:1.26-bookworm}
@@ -36,10 +26,8 @@ export PATH="/usr/local/go/bin:$PATH"
 apt-get update >/dev/null
 apt-get install -y --no-install-recommends iproute2 ca-certificates python3 >/dev/null
 
-# Unit + e2e package tests (includes fake OpenVPN session).
 go test ./internal/nativehelper ./internal/netbackend ./internal/runtimepaths -count=1
 
-# Build privileged helper for this platform.
 mkdir -p /tmp/vpntoris-smoke/bin /tmp/vpntoris-smoke/engines/linux-'"$GOARCH"'
 go build -o /tmp/vpntoris-smoke/bin/vpntoris-native-helper ./cmd/vpntoris-native-helper
 go build -o /tmp/vpntoris-smoke/bin/fake-openvpn ./internal/nativehelper/testdata/fake_openvpn
@@ -63,15 +51,12 @@ cat >"$ENGINE_DIR/manifest.json" <<EOF
 }
 EOF
 
-# Runtime paths used by runtimepaths on linux.
 mkdir -p /run/vpntoris-native /var/log/vpntoris /var/lib/vpntoris/engines
 cp -R /tmp/vpntoris-smoke/engines/linux-'"$GOARCH"' /var/lib/vpntoris/engines/
 
-# Create a real tun interface so defaultLookupInterface can succeed if used.
 ip tuntap add mode tun dev tun9 || true
 ip link set tun9 up || true
 
-# Start helper as root (container is root).
 /tmp/vpntoris-smoke/bin/vpntoris-native-helper daemon 0 /var/lib/vpntoris/engines &
 HELPER_PID=$!
 trap "kill $HELPER_PID 2>/dev/null || true; ip link del tun9 2>/dev/null || true" EXIT
@@ -134,7 +119,6 @@ print("routes:\n", routes)
 assert "10.38.0.0/16" in routes and "dev tun9" in routes
 assert "10.68.236.0/24" in routes
 assert "default" not in [line.split()[0] for line in routes.splitlines() if "tun9" in line] or True
-# Ensure we did not install 0.0.0.0/0 on tun9
 for line in routes.splitlines():
     if "tun9" in line:
         assert not line.startswith("default") and "0.0.0.0/0" not in line, line
@@ -148,7 +132,6 @@ print("routes after stop:\n", routes_after)
 assert "10.38.0.0/16" not in routes_after
 assert "10.68.236.0/24" not in routes_after
 
-# Start again and reset
 start2 = rpc({
     "action": "start",
     "profile": "profile-office",

@@ -13,7 +13,6 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
-
 	"vpntoris-tray/internal/fortihelper"
 )
 
@@ -84,7 +83,6 @@ func main() {
 		os.Exit(1)
 	}
 }
-
 func loadProfile(name string) (*localProfile, error) {
 	path := filepath.Join(os.Getenv("HOME"), "Library", "Application Support", "VPNToris", "configs.json")
 	data, err := os.ReadFile(path)
@@ -105,7 +103,6 @@ func loadProfile(name string) (*localProfile, error) {
 	}
 	return nil, fmt.Errorf("profile was not found")
 }
-
 func keychainPassword(name string) (string, error) {
 	command := exec.Command("/usr/bin/security", "find-generic-password", "-w", "-s", "com.vpntoris.credentials", "-a", name+".password")
 	output, err := command.Output()
@@ -114,12 +111,10 @@ func keychainPassword(name string) (string, error) {
 	}
 	return strings.TrimSuffix(string(output), "\n"), nil
 }
-
 func privateProfileID(name string) string {
 	digest := sha256.Sum256([]byte(name))
 	return "profile-" + hex.EncodeToString(digest[:8])
 }
-
 func splitValues(value string) []string {
 	fields := strings.FieldsFunc(value, func(character rune) bool {
 		return character == ',' || character == '\n' || character == ' ' || character == '\t'
@@ -132,7 +127,6 @@ func splitValues(value string) []string {
 	}
 	return result
 }
-
 func send(request fortihelper.Request) (*fortihelper.Response, error) {
 	connection, err := net.Dial("unix", socketPath)
 	if err != nil {
@@ -148,7 +142,6 @@ func send(request fortihelper.Request) (*fortihelper.Response, error) {
 	}
 	return &response, nil
 }
-
 func fatal(message string) {
 	fmt.Fprintln(os.Stderr, message)
 	os.Exit(1)

@@ -22,7 +22,6 @@ func TestReadSysfsCounter(t *testing.T) {
 		t.Fatalf("value = %d", value)
 	}
 }
-
 func TestReadInterfaceCountersRejectsTraversal(t *testing.T) {
 	if _, _, err := readInterfaceCounters("../escape"); err == nil {
 		t.Fatal("expected invalid interface name")

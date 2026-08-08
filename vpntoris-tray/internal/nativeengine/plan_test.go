@@ -8,7 +8,6 @@ func TestBuildNetworkPlanRejectsDefaultRoute(t *testing.T) {
 		t.Fatal("default route was accepted")
 	}
 }
-
 func TestBuildNetworkPlanNormalizesAndOrdersRoutes(t *testing.T) {
 	plan, err := BuildNetworkPlan(ProfileNetwork{Profile: "office", Interface: "utun12", ProcessID: 42, Routes: []string{"10.0.0.8/8", "10.0.0.1/32", "10.0.0.0/8"}, Domains: []string{"Corp.Example.com"}, DNSServers: []string{"10.0.0.53"}})
 	if err != nil {
@@ -24,7 +23,6 @@ func TestBuildNetworkPlanNormalizesAndOrdersRoutes(t *testing.T) {
 		t.Fatalf("domain was not normalized: %#v", plan.Mutations[4])
 	}
 }
-
 func TestBuildNetworkPlanRequiresScopedDNS(t *testing.T) {
 	_, err := BuildNetworkPlan(ProfileNetwork{Profile: "office", Interface: "utun12", ProcessID: 42, Routes: []string{"10.0.0.0/8"}, Domains: []string{"corp.example.com"}})
 	if err == nil {

@@ -1,19 +1,4 @@
 #!/bin/bash
-# Build architecture-specific Linux packages (DEB + RPM) using Docker.
-#
-# Why Docker:
-#   - Host is often macOS Apple Silicon; target is linux/amd64 or linux/arm64.
-#   - Homebrew rpmbuild on macOS is unreliable.
-#   - dpkg-deb for foreign arch packages is best done inside Debian.
-#   - Packaging tools and arch-native verification should match the target.
-#
-# Product policy: engines are a required product layer (same as macOS complete
-# PKG and Windows MSI). There is no app-only Linux package.
-#
-# Usage:
-#   ./scripts/linux/build-packages.sh                 # amd64
-#   GOARCH=arm64 VERSION=2.0.0 ./scripts/linux/build-packages.sh
-#
 set -euo pipefail
 
 ROOT_DIR=$(cd "$(dirname "$0")/../.." && pwd)
@@ -68,12 +53,10 @@ echo "platform: $DOCKER_PLATFORM"
 echo "out:      $OUT_DIR"
 echo
 
-# ─── 1. Build binaries inside target-arch container ───────────────
 echo "[1/4] Building Linux binaries via Docker ($DOCKER_PLATFORM)..."
 BUILDER_TAG="vpntoris-linux-builder:${GOARCH}"
 rm -rf "$BIN_DIR"
 mkdir -p "$BIN_DIR"
-# BuildKit local export avoids docker create on multi-stage/scratch images.
 DOCKER_BUILDKIT=1 docker build \
   --platform "$DOCKER_PLATFORM" \
   -f "$PACKAGING_DIR/Dockerfile.builder" \
@@ -84,12 +67,10 @@ DOCKER_BUILDKIT=1 docker build \
   --output "type=local,dest=$BIN_DIR" \
   "$ROOT_DIR"
 
-# Local export may nest under out/ and may include base-image FS layers; keep only our bins.
 if [[ -d $BIN_DIR/out ]]; then
   mv "$BIN_DIR/out/"* "$BIN_DIR/" 2>/dev/null || true
   rm -rf "$BIN_DIR/out"
 fi
-# Drop busybox rootfs leftovers from local export (bin/dev/etc/...).
 find "$BIN_DIR" -mindepth 1 -maxdepth 1 ! -name 'vpntoris*' -exec rm -rf {} +
 for bin in vpntorisd vpntoris-native-helper vpntoris-service vpntorisctl vpntoris-tray; do
   test -x "$BIN_DIR/$bin" || { echo "missing binary: $bin" >&2; exit 1; }
@@ -98,7 +79,6 @@ chmod 755 "$BIN_DIR"/vpntoris*
 echo "[1/4] Binaries:"
 ls -la "$BIN_DIR"
 
-# ─── 2. Stage filesystem layout ───────────────────────────────────
 echo "[2/4] Staging package root..."
 rm -rf "$STAGE_DIR"
 mkdir -p \
@@ -130,7 +110,6 @@ cp "$PACKAGING_DIR/vpntoris-native.service" "$STAGE_DIR/usr/lib/systemd/system/"
 cp "$PACKAGING_DIR/vpntorisd.user.service" "$STAGE_DIR/usr/lib/systemd/user/vpntorisd.service"
 cp "$PACKAGING_DIR/vpntoris-tray.desktop" "$STAGE_DIR/usr/share/applications/"
 cp "$PACKAGING_DIR/vpntoris-tray-autostart.desktop" "$STAGE_DIR/etc/xdg/autostart/vpntoris-tray.desktop"
-# Application icon (desktop menu + GNOME search + panel)
 for size in 16 22 24 32 48 64 128 256; do
   src="$ROOT_DIR/assets/icons/vpntoris-${size}.png"
   if [[ -f $src ]]; then
@@ -161,11 +140,6 @@ echo "[2/4] Bundling engines from $ENGINE_SRC (required product layer)"
 mkdir -p "$STAGE_DIR/var/lib/vpntoris/engines/linux-$GOARCH"
 cp -a "$ENGINE_SRC/." "$STAGE_DIR/var/lib/vpntoris/engines/linux-$GOARCH/"
 
-# ─── 2.5. Bundle AppIndicator GNOME Shell extension ───────────────
-# GNOME has no built-in StatusNotifier host. Instead of running dnf/apt at
-# install time (network access inside %post/postinst), the distro extension
-# package is fetched at build time and shipped under a private UUID so it can
-# never conflict with the distro's gnome-shell-extension-appindicator package.
 EXT_UUID="vpntoris-appindicator@vpntoris.local"
 EXT_DIR="$OUT_DIR/extension"
 echo "[2.5] Fetching AppIndicator shell extension (build-time download)..."
@@ -199,14 +173,11 @@ prepare_extension() {
   rm -rf "$dst"
   mkdir -p "$(dirname "$dst")"
   cp -a "$src" "$dst"
-  # Private UUID + product name (host is macOS: BSD sed).
   sed -i '' \
     -e "s/\"uuid\": *\"[^\"]*\"/\"uuid\": \"$EXT_UUID\"/" \
     -e "s/\"name\": *\"[^\"]*\"/\"name\": \"VPNToris AppIndicator\"/" \
     "$dst/metadata.json"
 }
-# Upstream UUID differs per distro (EPEL: appindicatorsupport@…, Debian:
-# ubuntu-appindicators@…), so discover the extracted extension directory.
 DEB_EXT_SRC=$(find "$EXT_DIR/deb/usr/share/gnome-shell/extensions" -mindepth 1 -maxdepth 1 -type d 2>/dev/null | head -1)
 RPM_EXT_SRC=$(find "$EXT_DIR/rpm/x/usr/share/gnome-shell/extensions" -mindepth 1 -maxdepth 1 -type d 2>/dev/null | head -1)
 prepare_extension \
@@ -219,7 +190,6 @@ mkdir -p "$STAGE_DIR/usr/share/glib-2.0/schemas"
 cp "$PACKAGING_DIR/20_vpntoris-appindicator.gschema.override" "$STAGE_DIR/usr/share/glib-2.0/schemas/"
 echo "[2.5] Bundled extension: $EXT_UUID"
 
-# ─── 3. DEB via Debian container ──────────────────────────────────
 echo "[3/4] Building DEB (Docker / dpkg-deb)..."
 rm -rf "$DEB_ROOT"
 mkdir -p "$DEB_ROOT"
@@ -246,7 +216,6 @@ docker run --rm --platform "$DOCKER_PLATFORM" \
   bash -ec "dpkg-deb --build /work/root /work/out/$DEB_NAME && dpkg-deb -I /work/out/$DEB_NAME | head -20"
 echo "[3/4] DEB: $OUT_DIR/$DEB_NAME"
 
-# ─── 4. RPM via Rocky container ───────────────────────────────────
 echo "[4/4] Building RPM (Docker / rpmbuild)..."
 rm -rf "$RPM_ROOT"
 mkdir -p "$RPM_ROOT"/{BUILD,RPMS,SOURCES,SPECS,SRPMS}
@@ -294,7 +263,6 @@ if docker run --rm --platform "$DOCKER_PLATFORM" \
   ls -la "$OUT_DIR"/*.rpm 2>/dev/null || true
 else
   echo "[4/4] RPM build FAILED — error context:" >&2
-  # Prefer the real failure (unpackaged files / error:) over a long file list tail.
   if grep -q 'unpackaged file' "$RPM_LOG" 2>/dev/null; then
     grep -n -E 'error:|unpackaged|RPM build errors' "$RPM_LOG" | head -20 | sed 's/^/  /' >&2
     echo "  (full log: $RPM_LOG)" >&2

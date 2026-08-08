@@ -21,17 +21,14 @@ func (backend *memoryBackend) Apply(_ context.Context, mutation Mutation) error 
 	backend.resources[mutation.Resource] = true
 	return nil
 }
-
 func (backend *memoryBackend) Undo(_ context.Context, mutation Mutation) error {
 	delete(backend.resources, mutation.Resource)
 	backend.undoOrder = append(backend.undoOrder, mutation.Resource)
 	return nil
 }
-
 func (backend *memoryBackend) Owned(_ context.Context, mutation Mutation) (bool, error) {
 	return backend.resources[mutation.Resource], nil
 }
-
 func TestManagerRollsBackInReverseOrder(t *testing.T) {
 	directory := t.TempDir()
 	journal, err := NewJournal(directory, "vpntoris-test")
@@ -55,7 +52,6 @@ func TestManagerRollsBackInReverseOrder(t *testing.T) {
 		t.Fatalf("completed rollback left journal entries: %#v", entries)
 	}
 }
-
 func TestManagerRecoversPersistedResources(t *testing.T) {
 	directory := t.TempDir()
 	journal, _ := NewJournal(directory, "vpntoris-test")
@@ -77,7 +73,6 @@ func TestManagerRecoversPersistedResources(t *testing.T) {
 		t.Fatalf("journal was not removed: %v", err)
 	}
 }
-
 func TestManagerRecoversPendingMutationAppliedBeforeCrash(t *testing.T) {
 	directory := t.TempDir()
 	journal, _ := NewJournal(directory, "vpntoris-test")

@@ -39,7 +39,6 @@ func TestLoadEngineManifestVerifiesDigestAndPath(t *testing.T) {
 		t.Fatal("digest mismatch was accepted")
 	}
 }
-
 func TestLoadEngineManifestVerifiesAssets(t *testing.T) {
 	root := t.TempDir()
 	executable := filepath.Join(root, "engine")

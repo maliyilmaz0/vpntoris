@@ -7,7 +7,6 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
-
 	"vpntoris-tray/internal/helperipc"
 	"vpntoris-tray/internal/nativehelper"
 	"vpntoris-tray/internal/netbackend"
@@ -46,7 +45,6 @@ func main() {
 		fatal(err.Error())
 	}
 }
-
 func fatal(message string) {
 	fmt.Fprintln(os.Stderr, message)
 	os.Exit(1)

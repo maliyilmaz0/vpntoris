@@ -1,19 +1,4 @@
 #!/bin/bash
-# Stage Windows native engines under .build/native-engines/windows-amd64/
-# for the complete MSI (same role as scripts/macos/build-*-engine.sh + package).
-#
-# Run on the maintainer macOS host (downloads official redistributables).
-# Engines are never resolved from PATH at runtime; each package has manifest.json.
-#
-# Layout:
-#   .build/native-engines/windows-amd64/
-#     openvpn/{bin/openvpn.exe,lib/*.dll,manifest.json,licenses/}
-#     openconnect/{bin/openconnect.exe,helpers,manifest.json}  (best-effort)
-#
-# Usage:
-#   ./scripts/windows/build-engines.sh
-#   SKIP_OPENCONNECT=1 ./scripts/windows/build-engines.sh
-#
 set -euo pipefail
 
 ROOT_DIR=$(cd "$(dirname "$0")/../.." && pwd)
@@ -21,18 +6,14 @@ CACHE_DIR="$ROOT_DIR/.build/cache/windows-engines"
 ENGINE_ROOT="$ROOT_DIR/.build/native-engines/windows-amd64"
 SKIP_OPENCONNECT=${SKIP_OPENCONNECT:-0}
 
-# OpenVPN Community Windows client (ships openvpn.exe + OpenSSL/LZO + often wintun)
 OPENVPN_VERSION=${OPENVPN_VERSION:-2.7.5}
 OPENVPN_MSI_NAME=${OPENVPN_MSI_NAME:-OpenVPN-${OPENVPN_VERSION}-I001-amd64.msi}
 OPENVPN_MSI_URL=${OPENVPN_MSI_URL:-https://swupdate.openvpn.org/community/releases/${OPENVPN_MSI_NAME}}
 
-# Official signed Wintun (required for --dev tun on modern OpenVPN)
 WINTUN_VERSION=${WINTUN_VERSION:-0.14.1}
 WINTUN_URL=${WINTUN_URL:-https://www.wintun.net/builds/wintun-${WINTUN_VERSION}.zip}
 WINTUN_SHA256=${WINTUN_SHA256:-07c256185d6ee3652e09fa55c0b673e2624b565e02c4b9091c79ca7d2f24ef51}
 
-# MSYS2 mingw64 openconnect package (best-effort; package revision may lag).
-# See https://packages.msys2.org/package/mingw-w64-x86_64-openconnect
 OPENCONNECT_MSYS_URL=${OPENCONNECT_MSYS_URL:-}
 OPENCONNECT_VERSION_LABEL=${OPENCONNECT_VERSION_LABEL:-9.12}
 
@@ -71,8 +52,6 @@ sha256_file() {
 }
 
 write_manifest() {
-  # Args: out_dir id protocol version executable_relpath [files.json path]
-  # executable is relative to engine root (windows-amd64), e.g. openvpn/bin/openvpn.exe
   local out_dir=$1 id=$2 protocol=$3 version=$4 executable=$5
   local files_path=${6:-}
   local abs="$ENGINE_ROOT/$executable"
@@ -114,7 +93,6 @@ print(f"wrote {out}")
 PY
 }
 
-# ─── OpenVPN + Wintun ─────────────────────────────────────────────
 stage_openvpn() {
   local msi="$CACHE_DIR/$OPENVPN_MSI_NAME"
   local extract="$CACHE_DIR/openvpn-msi-extract"
@@ -124,7 +102,6 @@ stage_openvpn() {
   echo "[openvpn] extracting $OPENVPN_MSI_NAME ..."
   msiextract -C "$extract" "$msi" >/dev/null
 
-  # Community MSI layout varies slightly by release; search for openvpn.exe.
   local found
   found=$(find "$extract" -type f -iname 'openvpn.exe' | head -1 || true)
   if [[ -z $found ]]; then
@@ -136,7 +113,6 @@ stage_openvpn() {
   bin_dir=$(dirname "$found")
   echo "[openvpn] using binary tree: $bin_dir"
   cp -f "$found" "$ENGINE_ROOT/openvpn/bin/openvpn.exe"
-  # Companion DLLs (OpenSSL, LZO, LZ4, …) live next to openvpn.exe in the MSI.
   find "$bin_dir" -maxdepth 1 -type f \( -iname '*.dll' -o -iname '*.exe' \) ! -iname 'openvpn.exe' | while read -r f; do
     base=$(basename "$f")
     case "$base" in
@@ -144,12 +120,10 @@ stage_openvpn() {
     esac
     cp -f "$f" "$ENGINE_ROOT/openvpn/lib/$base"
   done
-  # Also copy license/readme if present
   find "$extract" -type f \( -iname '*license*' -o -iname 'COPYING*' -o -iname 'README*' \) | head -20 | while read -r f; do
     cp -f "$f" "$ENGINE_ROOT/openvpn/licenses/$(basename "$f")" 2>/dev/null || true
   done
 
-  # Wintun: prefer MSI-bundled copy, else official zip (amd64).
   local wintun_src=""
   wintun_src=$(find "$extract" -type f -iname 'wintun.dll' | head -1 || true)
   if [[ -z $wintun_src ]]; then
@@ -173,12 +147,9 @@ stage_openvpn() {
     echo "error: wintun.dll not found" >&2
     exit 1
   fi
-  # OpenVPN loads wintun.dll from its directory; also keep a copy under lib/ for manifest.
   cp -f "$wintun_src" "$ENGINE_ROOT/openvpn/bin/wintun.dll"
   cp -f "$wintun_src" "$ENGINE_ROOT/openvpn/lib/wintun.dll"
 
-  # PATH for the supervised process is System32-only; ensure DLL search works by
-  # placing runtime DLLs next to openvpn.exe as well.
   if [[ -d $ENGINE_ROOT/openvpn/lib ]]; then
     find "$ENGINE_ROOT/openvpn/lib" -maxdepth 1 -type f -iname '*.dll' ! -iname 'wintun.dll' | while read -r dll; do
       cp -f "$dll" "$ENGINE_ROOT/openvpn/bin/$(basename "$dll")"
@@ -205,7 +176,6 @@ PY
   echo "[openvpn] staged $(du -sh "$ENGINE_ROOT/openvpn" | awk '{print $1}')"
 }
 
-# ─── OpenConnect (MSYS2 redistributable, best-effort) ─────────────
 stage_openconnect_helpers() {
   echo "[openconnect] building Windows helpers (vpnc-script, browser-open)..."
   (
@@ -226,12 +196,10 @@ stage_openconnect_engine() {
     return 0
   fi
 
-  # Try MSYS2 package if URL provided or probe a known mirror path.
   local pkg="$CACHE_DIR/mingw-w64-x86_64-openconnect.pkg.tar.zst"
   if [[ -n $OPENCONNECT_MSYS_URL ]]; then
     download "$OPENCONNECT_MSYS_URL" "$pkg"
   else
-    # Probe recent MSYS2 package name pattern; fail soft if unavailable.
     local probe_urls=(
       "https://repo.msys2.org/mingw/mingw64/mingw-w64-x86_64-openconnect-9.12-3-any.pkg.tar.zst"
       "https://mirror.msys2.org/mingw/mingw64/mingw-w64-x86_64-openconnect-9.12-3-any.pkg.tar.zst"
@@ -276,7 +244,6 @@ stage_openconnect_engine() {
     return 0
   fi
   cp -f "$oc_bin" "$ENGINE_ROOT/openconnect/bin/openconnect.exe"
-  # Collect DLLs from the package tree (mingw64/bin/*.dll)
   local mingw_bin
   mingw_bin=$(dirname "$oc_bin")
   find "$mingw_bin" -maxdepth 1 -type f -iname '*.dll' | while read -r dll; do
@@ -284,9 +251,6 @@ stage_openconnect_engine() {
     cp -f "$dll" "$ENGINE_ROOT/openconnect/lib/$(basename "$dll")"
   done
 
-  # Alias .exe helpers without extension expectation is Windows-native (.exe).
-  # nativehelper looks for vpntoris-vpnc-script without .exe on Unix; Windows needs adjustment.
-  # Keep both names: script.exe is primary; also copy bare name for Unix-style lookup if we fix later.
   cp -f "$ENGINE_ROOT/openconnect/bin/vpntoris-vpnc-script.exe" "$ENGINE_ROOT/openconnect/bin/vpntoris-vpnc-script" 2>/dev/null || true
   cp -f "$ENGINE_ROOT/openconnect/bin/vpntoris-browser-open.exe" "$ENGINE_ROOT/openconnect/bin/vpntoris-browser-open" 2>/dev/null || true
 
@@ -318,14 +282,11 @@ or SKIP_OPENCONNECT=1). Helper binaries may still be present for future use.
 OpenVPN + Wintun are the supported Windows engines in this release.
 FortiGate SSL (openfortivpn) and strongSwan IPsec remain deferred on Windows.
 EOF
-  # Remove empty engine expectation so MSI still installs helpers if any.
   if [[ ! -f $ENGINE_ROOT/openconnect/bin/openconnect.exe ]]; then
-    # Do not write a fake manifest pointing at a missing executable.
     rm -f "$ENGINE_ROOT/openconnect/manifest.json"
   fi
 }
 
-# ─── Protocol limit notes ─────────────────────────────────────────
 write_limits() {
   cat >"$ENGINE_ROOT/ENGINE_NOTES.txt" <<EOF
 VPNToris Windows engines (windows-amd64)

@@ -5,7 +5,6 @@ import (
 	"net"
 	"path/filepath"
 	"testing"
-
 	"vpntoris-tray/internal/fortihelper"
 	"vpntoris-tray/internal/runtimepaths"
 )
@@ -26,15 +25,12 @@ func TestHandleOverUnixSocketRoundTrip(t *testing.T) {
 	if err := service.PrepareRuntime(); err != nil {
 		t.Fatal(err)
 	}
-
-	// Keep the socket path short: macOS AF_UNIX sun_path is limited (~104 bytes).
 	socketPath := filepath.Join(t.TempDir(), "h.sock")
 	listener, err := net.Listen("unix", socketPath)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer listener.Close()
-
 	done := make(chan fortihelper.Response, 1)
 	go func() {
 		connection, acceptErr := listener.Accept()
@@ -52,7 +48,6 @@ func TestHandleOverUnixSocketRoundTrip(t *testing.T) {
 		_ = json.NewEncoder(connection).Encode(response)
 		done <- response
 	}()
-
 	client, err := net.Dial("unix", socketPath)
 	if err != nil {
 		t.Fatal(err)
@@ -70,7 +65,6 @@ func TestHandleOverUnixSocketRoundTrip(t *testing.T) {
 	}
 	<-done
 }
-
 func TestHandleStartFailsWithoutEngineManifest(t *testing.T) {
 	service, err := New(Config{EngineRoot: t.TempDir(), Router: memoryRouter{}})
 	if err != nil {

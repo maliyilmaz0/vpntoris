@@ -7,7 +7,6 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
-
 	"vpntoris-tray/internal/helperipc"
 	"vpntoris-tray/internal/nativehelper"
 	"vpntoris-tray/internal/netbackend"
@@ -30,7 +29,6 @@ func main() {
 		fatal(err.Error())
 	}
 	paths := runtimepaths.Current()
-	// Explicit full path layout enables journal recovery under StateDirectory.
 	service, err := nativehelper.New(nativehelper.Config{
 		Paths:      paths,
 		EngineRoot: runtimepaths.EngineBundle(engineRoot),
@@ -47,7 +45,6 @@ func main() {
 		fatal(err.Error())
 	}
 }
-
 func fatal(message string) {
 	fmt.Fprintln(os.Stderr, message)
 	os.Exit(1)

@@ -14,7 +14,6 @@ if [[ "$UNSIGNED" != "1" && "$UNSIGNED" != "true" ]]; then
   : "${VPNTORIS_MACOS_APPLICATION_IDENTITY:?Set VPNTORIS_MACOS_APPLICATION_IDENTITY in .env}"
   : "${VPNTORIS_MACOS_INSTALLER_IDENTITY:?Set VPNTORIS_MACOS_INSTALLER_IDENTITY in .env}"
 fi
-# Developer ID for release; ad-hoc "-" for local/dev (VPNTORIS_MACOS_UNSIGNED=1).
 if [[ "$UNSIGNED" == "1" || "$UNSIGNED" == "true" ]]; then
   CODESIGN_IDENTITY="-"
   CODESIGN_OPTS=(--force --sign "$CODESIGN_IDENTITY")
@@ -62,9 +61,6 @@ mkdir -p "$stage_root/Library/LaunchDaemons"
 mkdir -p "$stage_root/Library/Application Support/VPNToris/Engines/darwin-arm64"
 mkdir -p "$stage_root/Library/Application Support/VPNToris/Engines/darwin-amd64"
 mkdir -p "$scripts_root"
-# Build intermediates MUST NOT live under scripts_root: pkgbuild --scripts packs
-# every file there into the PKG, and Apple notarization rejects unsigned Mach-O
-# leftovers (helper-amd64, browser-open-*, …). Keep a separate build scratch dir.
 build_tmp=$(mktemp -d /tmp/vpntoris-native-pkg-build.XXXXXX)
 trap 'rm -rf "$stage_root" "$scripts_root" "$build_tmp"' EXIT
 cd "$repo_root/vpntoris-tray"
@@ -87,11 +83,9 @@ cp "$build_tmp/vpnc-script-amd64" "$stage_root/Library/Application Support/VPNTo
 cp "$build_tmp/browser-open-arm64" "$stage_root/Library/Application Support/VPNToris/Engines/darwin-arm64/openconnect/bin/vpntoris-browser-open"
 cp "$build_tmp/browser-open-amd64" "$stage_root/Library/Application Support/VPNToris/Engines/darwin-amd64/openconnect/bin/vpntoris-browser-open"
 cp "$repo_root/scripts/macos/native-helper.plist" "$stage_root/Library/LaunchDaemons/com.vpntoris.native-helper.plist"
-# scripts_root may only contain install scripts (shell), never Mach-O intermediates.
 cp "$repo_root/scripts/macos/native-postinstall" "$scripts_root/postinstall"
 chmod 0755 "$stage_root/Library/PrivilegedHelperTools/com.vpntoris.native-helper" "$scripts_root/postinstall"
 chmod 0644 "$stage_root/Library/LaunchDaemons/com.vpntoris.native-helper.plist"
-# Guard: refuse to package if any Mach-O leaked into --scripts.
 if find "$scripts_root" -type f -print0 | xargs -0 file 2>/dev/null | grep -q 'Mach-O'; then
   echo "error: Mach-O binary found under pkg scripts dir (would fail notarization):" >&2
   find "$scripts_root" -type f -print0 | xargs -0 file 2>/dev/null | sed 's/^/  /' >&2
@@ -141,7 +135,6 @@ jq -n --arg engine "$engine_sha256" --arg ssl "$ssl_sha256" --arg crypto "$crypt
 chmod -R u+w "$stage_root"
 xattr -cr "$stage_root" "$scripts_root" 2>/dev/null || true
 /usr/sbin/dot_clean -m "$stage_root" 2>/dev/null || true
-# Drop AppleDouble (._*) junk that can sneak into --scripts / payload.
 find "$stage_root" "$scripts_root" \( -name '._*' -o -name '.DS_Store' \) -delete 2>/dev/null || true
 rm -f "$output_path"
 if [[ "$UNSIGNED" == "1" || "$UNSIGNED" == "true" ]]; then

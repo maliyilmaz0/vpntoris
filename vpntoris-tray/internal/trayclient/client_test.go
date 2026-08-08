@@ -31,7 +31,6 @@ func TestProfilesAndActions(t *testing.T) {
 		}
 	}))
 	defer server.Close()
-
 	client := &Client{BaseURL: server.URL, HTTPClient: server.Client()}
 	profiles, err := client.Profiles()
 	if err != nil || len(profiles) != 1 || profiles[0].Name != "office" || !profiles[0].NeedsOTP {
@@ -63,7 +62,6 @@ func TestProfilesAndActions(t *testing.T) {
 		t.Fatalf("logs = %q err=%v", logs, err)
 	}
 }
-
 func TestConnectErrorSurfaced(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
 		http.Error(response, "gateway refused", http.StatusBadGateway)

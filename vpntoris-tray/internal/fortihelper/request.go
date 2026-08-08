@@ -6,7 +6,6 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
-
 	"vpntoris-tray/internal/openvpnconfig"
 )
 
@@ -41,13 +40,10 @@ type Request struct {
 	ExternalBrowser bool          `json:"externalBrowser,omitempty"`
 	TrustedCert     string        `json:"trustedCert,omitempty"`
 	Routes          []string      `json:"routes,omitempty"`
-	// Domains + DNSServers install scoped split DNS after the tunnel is up.
-	// Both must be set together (never global DNS replacement).
-	Domains    []string      `json:"domains,omitempty"`
-	DNSServers []string      `json:"dnsServers,omitempty"`
-	IPSec      *IPSecRequest `json:"ipsec,omitempty"`
+	Domains         []string      `json:"domains,omitempty"`
+	DNSServers      []string      `json:"dnsServers,omitempty"`
+	IPSec           *IPSecRequest `json:"ipsec,omitempty"`
 }
-
 type IPSecRequest struct {
 	Version       int    `json:"version"`
 	AuthMode      string `json:"authMode"`
@@ -68,7 +64,6 @@ type IPSecRequest struct {
 	IKEProposals  string `json:"ikeProposals"`
 	ESPProposals  string `json:"espProposals"`
 }
-
 type Response struct {
 	State     string `json:"state"`
 	Interface string `json:"interface,omitempty"`
@@ -97,7 +92,6 @@ func (request Request) Validate() error {
 	}
 	return nil
 }
-
 func (request Request) validateStart() error {
 	if request.Protocol == "" || request.Protocol == ProtocolFortiGateSSL {
 		return request.validateFortiGateStart()
@@ -113,7 +107,6 @@ func (request Request) validateStart() error {
 	}
 	return fmt.Errorf("unsupported VPN protocol")
 }
-
 func (request Request) validateIPSecStart() error {
 	if request.Host == "" || net.ParseIP(request.Host) == nil && !hostnamePattern.MatchString(request.Host) || strings.Contains(request.Host, "..") {
 		return fmt.Errorf("invalid VPN gateway")
@@ -157,7 +150,6 @@ func (request Request) validateIPSecStart() error {
 	}
 	return request.validateRoutes()
 }
-
 func (request Request) IPSecConfiguration() string {
 	settings := request.IPSec
 	localID := settings.LocalID
@@ -187,7 +179,6 @@ func (request Request) IPSecConfiguration() string {
 	}
 	return fmt.Sprintf("connections {\n  %s {\n    version = %d\n    remote_addrs = %s\n    proposals = %s\n    rekey_time = %ds\n    dpd_delay = %ds\n    dpd_timeout = %ds\n    fragmentation = %s\n    mobike = %t\n    encap = %t\n%s%s%s    children {\n      net-%s {\n        local_ts = dynamic\n        remote_ts = %s\n        esp_proposals = %s\n        life_time = %ds\n        replay_window = %d\n        dpd_action = %s\n      }\n    }\n  }\n}\nsecrets {\n%s}\n", request.Profile, settings.Version, request.Host, settings.IKEProposals, settings.IKELifetime, settings.DPDDelay, settings.DPDTimeout, settings.Fragmentation, settings.MOBIKE, settings.ForceEncap, aggressive, vips, auth, request.Profile, strings.Join(request.Routes, ","), settings.ESPProposals, settings.ChildLifetime, settings.ReplayWindow, settings.DPDAction, secrets)
 }
-
 func (request Request) validateOpenConnectStart() error {
 	if request.Host == "" || net.ParseIP(request.Host) == nil && !hostnamePattern.MatchString(request.Host) || strings.Contains(request.Host, "..") {
 		return fmt.Errorf("invalid VPN gateway")
@@ -207,7 +198,6 @@ func (request Request) validateOpenConnectStart() error {
 	}
 	return request.validateRoutes()
 }
-
 func (request Request) validateFortiGateStart() error {
 	if request.Host == "" || net.ParseIP(request.Host) == nil && !hostnamePattern.MatchString(request.Host) || strings.Contains(request.Host, "..") {
 		return fmt.Errorf("invalid VPN gateway")
@@ -229,7 +219,6 @@ func (request Request) validateFortiGateStart() error {
 	}
 	return request.validateRoutes()
 }
-
 func (request Request) validateOpenVPNStart() error {
 	if _, err := openvpnconfig.Sanitize(request.Configuration); err != nil {
 		return err
@@ -248,7 +237,6 @@ func (request Request) validateOpenVPNStart() error {
 	}
 	return request.validateRoutes()
 }
-
 func (request Request) validateRoutes() error {
 	if len(request.Routes) == 0 || len(request.Routes) > 64 {
 		return fmt.Errorf("one to 64 routes are required")
@@ -263,7 +251,6 @@ func (request Request) validateRoutes() error {
 	}
 	return request.validateSplitDNS()
 }
-
 func (request Request) validateSplitDNS() error {
 	if len(request.Domains) == 0 && len(request.DNSServers) == 0 {
 		return nil
@@ -288,7 +275,6 @@ func (request Request) validateSplitDNS() error {
 	}
 	return nil
 }
-
 func (request Request) Arguments() []string {
 	arguments := []string{
 		net.JoinHostPort(request.Host, strconv.Itoa(request.Port)),

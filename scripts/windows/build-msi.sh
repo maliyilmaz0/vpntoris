@@ -1,17 +1,4 @@
 #!/bin/bash
-# Build the complete VPNToris Windows MSI (app binaries + native engines).
-#
-# Product policy: engines are a required product layer (same as macOS
-# complete.pkg). There is no app-only / engines-skipped Windows installer.
-#
-# Prerequisites (maintainer macOS host):
-#   brew install msitools   # wixl, wixl-heat, msiextract
-#   go, curl, unzip, python3
-#
-# Usage:
-#   VERSION=2.0.0 ./scripts/windows/build-msi.sh
-#   VERSION=2.0.0 ./scripts/windows/build-msi.sh --skip-sign
-#
 set -euo pipefail
 
 ROOT_DIR=$(cd "$(dirname "$0")/../.." && pwd)
@@ -44,7 +31,6 @@ done
 
 if [[ -f "$ROOT_DIR/.env" ]]; then
   set -a
-  # shellcheck disable=SC1091
   source "$ROOT_DIR/.env"
   set +a
 fi
@@ -67,12 +53,10 @@ require_cmd wixl
 require_cmd wixl-heat
 require_cmd python3
 
-# WiX Version is Major.Minor.Build.Revision (max 255.255.65535.65535)
 msi_version() {
   python3 - "$VERSION" <<'PY'
 import re, sys
 raw = sys.argv[1].strip()
-# 2.0.0 / 2.0.0-rc1 → 2.0.0.0
 m = re.match(r"^(\d+)\.(\d+)\.(\d+)", raw)
 if not m:
     print("0.0.0.0")
@@ -99,7 +83,6 @@ echo "out:      $MSI_PATH"
 echo "policy:   engines required (no app-only builds)"
 echo
 
-# ─── 1. Cross-compile PE if missing (never a product by itself) ───
 echo "[1/5] Windows PE binaries..."
 need_pe=false
 for bin in vpntorisd.exe vpntoris-native-helper.exe vpntoris-service.exe vpntorisctl.exe vpntoris-tray.exe; do
@@ -133,7 +116,6 @@ for bin in vpntorisd.exe vpntoris-native-helper.exe vpntoris-service.exe vpntori
 done
 echo "[1/5] staged PE binaries"
 
-# ─── 2. Native engines (always required) ──────────────────────────
 echo "[2/5] Native engines (required product layer)..."
 if [[ ! -f $ENGINE_SRC/openvpn/bin/openvpn.exe ]]; then
   echo "[2/5] building engines (openvpn/wintun + openconnect helpers)..."
@@ -157,7 +139,6 @@ cp -a "$ENGINE_SRC" "$STAGE/engines/windows-amd64"
 echo "[2/5] engines from $ENGINE_SRC"
 du -sh "$STAGE/engines/windows-amd64"/* 2>/dev/null || true
 
-# ─── 3. Heat engine files + merge WiX ─────────────────────────────
 echo "[3/5] Generating WiX fragments..."
 WXS_MAIN="$HEAT_DIR/vpntoris.wxs"
 WXS_ENGINES="$HEAT_DIR/engines-fragment.wxs"
@@ -182,7 +163,6 @@ find "$ENGINE_SOURCE" -type f | sort | wixl-heat \
   >"$WXS_ENGINES"
 
 file_count=$(rg -c 'File Id=' "$WXS_ENGINES" 2>/dev/null || echo 0)
-# Fallback if rg missing
 if [[ $file_count == 0 ]]; then
   file_count=$(grep -c 'File Id=' "$WXS_ENGINES" 2>/dev/null || echo 0)
 fi
@@ -191,13 +171,11 @@ if [[ ${file_count:-0} -lt 1 ]]; then
   echo "error: engine heat produced no File entries — refusing app-only MSI" >&2
   exit 1
 fi
-# openvpn.exe must be in the harvested set
 if ! grep -q 'openvpn.exe' "$WXS_ENGINES"; then
   echo "error: heat fragment missing openvpn.exe" >&2
   exit 1
 fi
 
-# ─── 4. Sign PE binaries before cab (MSI embeds them) ─────────────
 echo "[4/5] Authenticode (PE)..."
 if [[ $SKIP_SIGN == false && ${SIGN_WINDOWS:-false} == true ]]; then
   if [[ -z ${SAFENET_PIN:-} ]]; then
@@ -210,7 +188,6 @@ else
   echo "[4/5] PE signing skipped"
 fi
 
-# ─── 5. wixl package ──────────────────────────────────────────────
 echo "[5/5] wixl packaging..."
 cp -f "$STAGE"/*.exe "$HEAT_DIR/"
 cd "$HEAT_DIR"

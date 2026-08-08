@@ -24,7 +24,6 @@ func readInterfaceCounters(interfaceName string) (uint64, uint64, error) {
 	}
 	return received, sent, nil
 }
-
 func readSysfsCounter(path string) (uint64, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {

@@ -8,8 +8,6 @@ import (
 	"strings"
 )
 
-// promptSecret asks the user for a short secret (password/OTP) using a native dialog when available.
-// Secrets are never written to application logs by this function.
 func promptSecret(title, message string) (string, error) {
 	var (
 		value string
@@ -51,15 +49,12 @@ func promptSecret(title, message string) (string, error) {
 	})
 	return value, err
 }
-
 func eor(err, fallback error) error {
 	if err != nil {
 		return err
 	}
 	return fallback
 }
-
-// promptEntry asks for a single line of text with an optional default.
 func promptEntry(title, message, defaultValue string) (string, error) {
 	switch runtime.GOOS {
 	case "linux":
@@ -89,8 +84,6 @@ func promptEntry(title, message, defaultValue string) (string, error) {
 	}
 	return "", fmt.Errorf("entry dialog cancelled")
 }
-
-// promptList asks the user to pick one of the options.
 func promptList(title, message string, options []string, selected string) (string, error) {
 	if len(options) == 0 {
 		return "", fmt.Errorf("no options")
@@ -102,7 +95,6 @@ func promptList(title, message string, options []string, selected string) (strin
 		if value, err := runPrompt("zenity", args...); err == nil && value != "" {
 			return value, nil
 		}
-		// Fallback: numbered menu via kdialog
 		if value, err := runPrompt("kdialog", append([]string{"--title", title, "--menu", message}, flattenMenu(options)...)...); err == nil {
 			return value, nil
 		}
@@ -116,17 +108,13 @@ func promptList(title, message string, options []string, selected string) (strin
 			return value, nil
 		}
 	case "windows":
-		// Simple fallback: entry with hint
 		hint := message + " [" + strings.Join(options, "|") + "]"
 		if value, err := promptEntry(title, hint, selected); err == nil {
 			return value, nil
 		}
 	}
-	// Last resort: first option if selected matches, else cancel
 	return "", fmt.Errorf("list dialog cancelled")
 }
-
-// promptFile opens a file chooser and returns the selected path.
 func promptFile(title, message string) (string, error) {
 	switch runtime.GOOS {
 	case "linux":
@@ -155,8 +143,6 @@ if ($f.ShowDialog() -eq 'OK') { $f.FileName }
 	_ = message
 	return "", fmt.Errorf("file dialog cancelled")
 }
-
-// promptConfirm asks a yes/no question.
 func promptConfirm(title, message string) bool {
 	var ok bool
 	withDialog(func() {
@@ -187,7 +173,6 @@ func promptConfirm(title, message string) bool {
 	})
 	return ok
 }
-
 func flattenMenu(options []string) []string {
 	out := make([]string, 0, len(options)*2)
 	for _, option := range options {
@@ -195,7 +180,6 @@ func flattenMenu(options []string) []string {
 	}
 	return out
 }
-
 func runPrompt(name string, args ...string) (string, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), dialogTimeout)
 	defer cancel()
@@ -207,7 +191,6 @@ func runPrompt(name string, args ...string) (string, error) {
 	}
 	return strings.TrimSpace(string(output)), nil
 }
-
 func escapePS(value string) string {
 	return strings.ReplaceAll(value, "'", "''")
 }

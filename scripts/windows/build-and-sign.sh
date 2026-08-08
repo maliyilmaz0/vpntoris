@@ -1,14 +1,4 @@
 #!/bin/bash
-# Complete Windows product build on macOS: PE binaries + native engines + MSI.
-#
-# Product policy: engines (OpenVPN/Wintun/…) are a required product layer —
-# the same role as macOS complete.pkg engines. There is NO app-only / exe-only
-# Windows release path.
-#
-# Usage:
-#   SAFENET_PIN=**** ./scripts/windows/build-and-sign.sh
-#   ./scripts/windows/build-and-sign.sh --skip-sign
-#
 set -euo pipefail
 
 ROOT_DIR=$(cd "$(dirname "$0")/../.." && pwd)
@@ -35,12 +25,10 @@ done
 
 if [[ -f "$ROOT_DIR/.env" ]]; then
   set -a
-  # shellcheck disable=SC1091
   source "$ROOT_DIR/.env"
   set +a
 fi
 
-# PIN alone is enough to request signing when SIGN_WINDOWS is not forced off.
 if [[ -n ${SAFENET_PIN:-} && ${SIGN_WINDOWS:-} != "false" ]]; then
   SIGN_WINDOWS=true
 fi

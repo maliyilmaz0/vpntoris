@@ -9,7 +9,6 @@ import (
 	"strconv"
 	"strings"
 	"time"
-
 	"vpntoris-tray/internal/fortihelper"
 	"vpntoris-tray/internal/nativeengine"
 )
@@ -31,8 +30,6 @@ func (service *Service) startIPSecLocked(request fortihelper.Request) fortihelpe
 	_ = chownUser(logFile, service.userID)
 	otpPath := ""
 	if request.TwoFactor {
-		// The bundled xauth-generic plugin blocks on this FIFO while the UI
-		// collects the one-time password. It is removed with the session.
 		otpPath = filepath.Join(service.paths.RuntimeDirectory, "ipsec-otp")
 		_ = os.Remove(otpPath)
 		if err := createOTPChannel(otpPath); err != nil {
@@ -83,7 +80,6 @@ func (service *Service) startIPSecLocked(request fortihelper.Request) fortihelpe
 	}()
 	return fortihelper.Response{State: state}
 }
-
 func (service *Service) ensureIPSecDaemonLocked() error {
 	if service.ipsecCommand != nil && service.ipsecCommand.Process != nil {
 		return nil
@@ -153,7 +149,6 @@ func (service *Service) ensureIPSecDaemonLocked() error {
 	logFile.Close()
 	return fmt.Errorf("native IPsec daemon did not become ready")
 }
-
 func (service *Service) ipsecVICIReady() bool {
 	connection, err := net.DialTimeout("unix", service.ipsecSocket, 500*time.Millisecond)
 	if err != nil {
@@ -162,7 +157,6 @@ func (service *Service) ipsecVICIReady() bool {
 	_ = connection.Close()
 	return true
 }
-
 func (service *Service) waitForIPSecDaemon(command *exec.Cmd, logFile *os.File) {
 	waitError := command.Wait()
 	service.mu.Lock()
@@ -184,11 +178,9 @@ func (service *Service) waitForIPSecDaemon(command *exec.Cmd, logFile *os.File) 
 		}
 	}
 }
-
 func (service *Service) ipsecEnvironment() []string {
 	return []string{"PATH=/usr/bin:/bin:/usr/sbin:/sbin", "LANG=C", "LC_ALL=C", "STRONGSWAN_CONF=" + service.ipsecConfig}
 }
-
 func (service *Service) cleanupOrphanedIPSecDaemonLocked() {
 	pattern := filepath.Join(service.engineRoot, "strongswan", "bin", "charon")
 	output, err := exec.Command("pgrep", "-f", pattern).Output()
@@ -211,14 +203,12 @@ func (service *Service) cleanupOrphanedIPSecDaemonLocked() {
 		}
 	}
 }
-
 func (service *Service) ipsecCommandFor(arguments ...string) *exec.Cmd {
 	arguments = append(arguments, "--uri", "unix://"+service.ipsecSocket)
 	command := exec.Command(service.ipsecSwanctl, arguments...)
 	command.Env = service.ipsecEnvironment()
 	return command
 }
-
 func (service *Service) stopIPSecLocked(current *session) {
 	terminate := service.ipsecCommandFor("--terminate", "--ike", current.request.Profile, "--timeout", "10")
 	_ = terminate.Run()
@@ -233,7 +223,6 @@ func (service *Service) stopIPSecLocked(current *session) {
 	current.state = "stopped"
 	service.stopIPSecDaemonIfIdleLocked()
 }
-
 func (service *Service) stopIPSecDaemonIfIdleLocked() {
 	for _, candidate := range service.sessions {
 		if candidate.request.Protocol == fortihelper.ProtocolIPSec && candidate.state == "connected" {

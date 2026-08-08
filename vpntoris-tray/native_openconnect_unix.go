@@ -6,23 +6,19 @@ import (
 	"fmt"
 	"strconv"
 	"time"
-
 	"vpntoris-tray/internal/fortihelper"
 )
 
 func nativeOpenConnectSupported(config VPNConfig) bool {
 	return config.Type == "openconnect" && openConnectProtocol(config) != "" && nativeHelperReady()
 }
-
 func nativeOpenConnectNeedsOTP(name string) bool {
 	status, err := nativeFortiStatus(name)
 	return err == nil && status.State == "waiting-otp"
 }
-
 func nativeOpenConnectTraffic(name string) (uint64, uint64, int64, error) {
 	return nativeFortiTraffic(name)
 }
-
 func nativeOpenConnectConnect(config VPNConfig) error {
 	port, err := strconv.Atoi(config.Port)
 	if err != nil {

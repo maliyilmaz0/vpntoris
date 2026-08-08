@@ -6,8 +6,6 @@ import (
 	"strings"
 )
 
-// NetworkAndMask converts an IPv4 CIDR to dotted network and mask strings
-// suitable for the Windows route.exe command.
 func NetworkAndMask(cidr string) (network string, mask string, err error) {
 	prefix, err := netip.ParsePrefix(strings.TrimSpace(cidr))
 	if err != nil || !prefix.Addr().Is4() {

@@ -27,7 +27,6 @@ func TestCurrentHasRequiredFields(t *testing.T) {
 		}
 	}
 }
-
 func TestEngineBundleUsesGOOSAndGOARCH(t *testing.T) {
 	bundle := EngineBundle("/opt/vpntoris/engines")
 	expected := filepath.Join("/opt/vpntoris/engines", runtime.GOOS+"-"+runtime.GOARCH)
@@ -35,7 +34,6 @@ func TestEngineBundleUsesGOOSAndGOARCH(t *testing.T) {
 		t.Fatalf("EngineBundle = %q, want %q", bundle, expected)
 	}
 }
-
 func TestProfileLog(t *testing.T) {
 	paths := Paths{LogDirectory: "/var/log/vpntoris"}
 	got := paths.ProfileLog("profile-abc")
@@ -44,7 +42,6 @@ func TestProfileLog(t *testing.T) {
 		t.Fatalf("ProfileLog = %q, want %q", got, want)
 	}
 }
-
 func TestHelperSocketIsUnderRuntimeDirectory(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		paths := Current()

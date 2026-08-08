@@ -45,9 +45,6 @@ mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources/Licenses" "$DIST_DIR"
 cp "$ROOT_DIR/vpntoris-tray/Info.plist" "$APP/Contents/Info.plist"
 cp "$ROOT_DIR/assets/vpntoris-logo.png" "$APP/Contents/Resources/VPNTorisLogo.png"
 cp -R "$ROOT_DIR/vpntoris-tray/Resources/." "$APP/Contents/Resources/"
-# Legacy Docker runtime context (v1). v2 native path does not require it.
-# Keep an empty directory so the app bundle layout stays stable if resources
-# still reference DockerContext; do not fail the complete product build.
 mkdir -p "$APP/Contents/Resources/DockerContext"
 if [[ -d $ROOT_DIR/docker ]]; then
   cp -R "$ROOT_DIR/docker/." "$APP/Contents/Resources/DockerContext/"

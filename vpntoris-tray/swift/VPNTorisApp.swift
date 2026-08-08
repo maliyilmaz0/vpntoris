@@ -108,7 +108,6 @@ enum DisplayPreferences {
     private static let popoverKey = "display.showPopoverTraffic"
     private static let menuBarKey = "display.showMenuBarTraffic"
 
-    /// Traffic rates/totals inside the popover profile cards (default on).
     static var showPopoverTraffic: Bool {
         get {
             let defaults = UserDefaults.standard
@@ -117,7 +116,6 @@ enum DisplayPreferences {
         set { UserDefaults.standard.set(newValue, forKey: popoverKey) }
     }
 
-    /// Live rates in the menu bar status item title (default off).
     static var showMenuBarTraffic: Bool {
         get {
             let defaults = UserDefaults.standard
@@ -994,7 +992,6 @@ struct ContentView: View {
         return hours > 0 ? String(format: "%02d:%02d:%02d", hours, minutes, remaining) : String(format: "%02d:%02d", minutes, remaining)
     }
 
-    /// Case-insensitive match against status fields and full stored profile (host, DNS, routes, config text, etc.).
     private func profileMatchesSearch(_ profile: ProfileStatus, query: String) -> Bool {
         let needle = query.lowercased()
         var parts: [String] = [

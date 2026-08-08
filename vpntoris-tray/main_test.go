@@ -17,14 +17,12 @@ func TestContainerName(t *testing.T) {
 		}
 	}
 }
-
 func TestContainerNameDoesNotAllowDockerNameInjection(t *testing.T) {
 	got := containerName("../../VPN; docker rm")
 	if strings.ContainsAny(got, "/; ") {
 		t.Fatalf("unsafe container name: %q", got)
 	}
 }
-
 func TestParseRoutes(t *testing.T) {
 	routes, err := parseRoutes("198.51.100.0/24, 203.0.113.0/24")
 	if err != nil {
@@ -37,7 +35,6 @@ func TestParseRoutes(t *testing.T) {
 		t.Fatal("parseRoutes() accepted an address without CIDR prefix")
 	}
 }
-
 func TestParseByteSize(t *testing.T) {
 	tests := map[string]uint64{"12B": 12, "1.5kB": 1500, "2MiB": 2 * 1024 * 1024, "3.2GB": 3200000000}
 	for input, expected := range tests {
@@ -47,7 +44,6 @@ func TestParseByteSize(t *testing.T) {
 		}
 	}
 }
-
 func TestBuildIPSecProposals(t *testing.T) {
 	got, err := buildProposals("aes256,aes256gcm16", "sha256", "prfsha256", "14,20", true)
 	if err != nil {
@@ -58,7 +54,6 @@ func TestBuildIPSecProposals(t *testing.T) {
 		t.Fatalf("proposals = %q, want %q", got, want)
 	}
 }
-
 func TestRenderSwanctlConfig(t *testing.T) {
 	profile := VPNConfig{Name: "office", Type: "ipsec", Host: "vpn.example.com", User: "alice", Password: "login-secret", Routes: "10.68.0.0/16", IPSec: &IPSecConfig{
 		IKEVersion: 2, AuthMode: "eap", PreSharedKey: "shared-secret", ModeConfig: true,
@@ -75,7 +70,6 @@ func TestRenderSwanctlConfig(t *testing.T) {
 		}
 	}
 }
-
 func TestOpenConnectProtocolDefaultsAndValidation(t *testing.T) {
 	if value := openConnectProtocol(VPNConfig{Type: "openconnect"}); value != "anyconnect" {
 		t.Fatalf("unexpected default protocol: %s", value)
@@ -87,7 +81,6 @@ func TestOpenConnectProtocolDefaultsAndValidation(t *testing.T) {
 		t.Fatalf("accepted unsupported protocol: %s", value)
 	}
 }
-
 func TestSanitizeDiagnosticText(t *testing.T) {
 	secrets := []string{"super-" + "secret", "another-" + "secret", "visible-" + "token", "123" + "456"}
 	input := "password=" + secrets[0] + " psk:" + secrets[1] + " --token " + secrets[2] + " otp " + secrets[3] + " safe=value"
@@ -101,7 +94,6 @@ func TestSanitizeDiagnosticText(t *testing.T) {
 		t.Fatalf("unrelated diagnostic content was removed: %s", output)
 	}
 }
-
 func TestGatewayFailoverState(t *testing.T) {
 	previousPath := configPath
 	configPath = t.TempDir() + "/configs.json"
@@ -125,7 +117,6 @@ func TestGatewayFailoverState(t *testing.T) {
 		t.Fatalf("unexpected persisted gateway order: %v", got)
 	}
 }
-
 func TestOverrideOpenVPNRemote(t *testing.T) {
 	configuration := "client\nremote vpn-a.example.com 1194 udp\nremote vpn-b.example.com 443 tcp\nauth-user-pass\n"
 	result := overrideOpenVPNRemote(configuration, "vpn-c.example.com", "1194")
@@ -136,7 +127,6 @@ func TestOverrideOpenVPNRemote(t *testing.T) {
 		t.Fatalf("OpenVPN configuration content was lost: %s", result)
 	}
 }
-
 func TestDockerCommandIncludesCredentialHelper(t *testing.T) {
 	command := dockerCommand("version")
 	path := ""

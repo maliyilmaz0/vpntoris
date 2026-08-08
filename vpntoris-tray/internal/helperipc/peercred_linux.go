@@ -4,13 +4,10 @@ package helperipc
 
 import (
 	"fmt"
-	"net"
-
 	"golang.org/x/sys/unix"
+	"net"
 )
 
-// peerCredentialsUID returns the uid of the process on the other end of a
-// Unix-domain socket via SO_PEERCRED.
 func peerCredentialsUID(connection net.Conn) (uint32, error) {
 	unixConn, ok := connection.(*net.UnixConn)
 	if !ok {

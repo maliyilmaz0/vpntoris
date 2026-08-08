@@ -68,7 +68,6 @@ func BuildNetworkPlan(network ProfileNetwork) (Plan, error) {
 	}
 	return plan, nil
 }
-
 func validDomainName(domain string) bool {
 	if domain == "" || len(domain) > 253 || strings.HasPrefix(domain, ".") || strings.HasSuffix(domain, ".") {
 		return false

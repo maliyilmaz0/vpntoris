@@ -18,7 +18,6 @@ type profile struct {
 	Host      string `json:"host"`
 	Connected bool   `json:"connected"`
 }
-
 type flow struct {
 	Profile string `json:"profile"`
 	Process string `json:"process"`
@@ -76,7 +75,6 @@ func main() {
 		usage()
 	}
 }
-
 func action(action, name string) {
 	request, err := http.NewRequest(http.MethodPost, api+"/api/action?action="+url.QueryEscape(action)+"&name="+url.QueryEscape(name), nil)
 	check(err)
@@ -93,7 +91,6 @@ func action(action, name string) {
 	}
 	fmt.Println("ok")
 }
-
 func getJSON(path string, target any) {
 	response, err := http.Get(api + path)
 	check(err)
@@ -104,7 +101,6 @@ func getJSON(path string, target any) {
 	}
 	check(json.NewDecoder(response.Body).Decode(target))
 }
-
 func printJSON(value any) { data, _ := json.MarshalIndent(value, "", "  "); fmt.Println(string(data)) }
 func requireName() {
 	if len(os.Args) < 3 {

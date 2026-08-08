@@ -1,10 +1,6 @@
 #!/bin/bash
 set -euo pipefail
 
-# Packages OpenConnect for Linux under:
-#   .build/native-engines/linux-${GOARCH}/openconnect/{bin,lib,manifest.json}
-# Also stages vpntoris-vpnc-script and vpntoris-browser-open next to the engine binary.
-
 ROOT_DIR=$(cd "$(dirname "$0")/../.." && pwd)
 GOARCH=${GOARCH:-amd64}
 case "$GOARCH" in
@@ -27,7 +23,6 @@ mkdir -p "$OUTPUT_ROOT/bin" "$OUTPUT_ROOT/lib" "$OUTPUT_ROOT/licenses"
 echo "Building OpenConnect helpers and packaging engine for linux/${GOARCH}..."
 
 mkdir -p "$ROOT_DIR/.build/tmp-linux-$GOARCH"
-# Build helper binaries for linux via Docker Go image.
 docker run --rm --platform "$DOCKER_PLATFORM" \
   -v "$ROOT_DIR:/src" -w /src/vpntoris-tray \
   -e CGO_ENABLED=0 \
@@ -37,7 +32,6 @@ docker run --rm --platform "$DOCKER_PLATFORM" \
     go build -o /src/.build/tmp-linux-$GOARCH/vpntoris-browser-open ./cmd/vpntoris-browser-open
   "
 
-# Package distro openconnect binary + libs (source rebuild can replace this later).
 docker run --rm --platform "$DOCKER_PLATFORM" \
   -e GOARCH="$GOARCH" \
   -v "$OUTPUT_ROOT:/out" \
@@ -82,7 +76,6 @@ manifest = {
   "capabilities": ["anyconnect","gp","pulse","nc","f5","fortinet","array","otp","split-route"],
   "files": files,
 }
-# Prefer detected version when available.
 version = """$VERSION""".strip()
 if version and version != "unknown":
     manifest["version"] = version

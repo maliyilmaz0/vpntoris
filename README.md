@@ -69,6 +69,9 @@ Download the platform package from [Releases](https://github.com/maliyilmaz0/vpn
 
 ## Development (source)
 
+Design and operational notes live in [`docs/`](docs/): architecture, security
+model, packaging and development conventions.
+
 ```bash
 cd vpntoris-tray
 go test ./...

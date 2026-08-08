@@ -9,7 +9,6 @@ import (
 	"strings"
 )
 
-// NewDNS returns the macOS split-DNS backend (/etc/resolver scoped files).
 func NewDNS() DNSConfigurator {
 	return darwinDNS{resolverRoot: "/etc/resolver"}
 }
@@ -35,7 +34,6 @@ func (dns darwinDNS) AddScoped(interfaceName, domain string, servers []string) e
 	}
 	return os.WriteFile(filepath.Join(dns.resolverRoot, domain), []byte(builder.String()), 0644)
 }
-
 func (dns darwinDNS) RemoveScoped(interfaceName, domain string) error {
 	_ = interfaceName
 	domain = strings.ToLower(strings.TrimSpace(domain))

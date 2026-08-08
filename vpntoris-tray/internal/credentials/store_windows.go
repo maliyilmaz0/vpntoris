@@ -3,14 +3,12 @@
 package credentials
 
 import (
-	"strings"
-
 	"github.com/danieljoos/wincred"
+	"strings"
 )
 
 const windowsTargetPrefix = "VPNToris/"
 
-// New returns a Windows Credential Manager backed store.
 func New() Store {
 	return windowsStore{}
 }
@@ -27,7 +25,6 @@ func (windowsStore) Write(profile, field, value string) error {
 	credential.Persist = wincred.PersistLocalMachine
 	return credential.Write()
 }
-
 func (windowsStore) Read(profile, field string) (string, error) {
 	credential, err := wincred.GetGenericCredential(targetName(profile, field))
 	if err != nil {
@@ -35,13 +32,11 @@ func (windowsStore) Read(profile, field string) (string, error) {
 	}
 	return string(credential.CredentialBlob), nil
 }
-
 func (windowsStore) Delete(profile string) error {
 	_ = deleteTarget(targetName(profile, "password"))
 	_ = deleteTarget(targetName(profile, "psk"))
 	return nil
 }
-
 func deleteTarget(target string) error {
 	credential, err := wincred.GetGenericCredential(target)
 	if err != nil {
@@ -49,7 +44,6 @@ func deleteTarget(target string) error {
 	}
 	return credential.Delete()
 }
-
 func targetName(profile, field string) string {
 	return windowsTargetPrefix + strings.TrimSpace(profile) + "/" + strings.TrimSpace(field)
 }

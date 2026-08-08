@@ -4,7 +4,6 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
-
 	"vpntoris-tray/internal/fortihelper"
 	"vpntoris-tray/internal/runtimepaths"
 )
@@ -15,7 +14,6 @@ func TestPPPReadyPatternIdentifiesOwnedInterface(t *testing.T) {
 		t.Fatalf("got %q", name)
 	}
 }
-
 func TestPPPReadyPatternRejectsUnrelatedText(t *testing.T) {
 	values := [][]byte{
 		[]byte("Interface utun4 is UP."),
@@ -28,7 +26,6 @@ func TestPPPReadyPatternRejectsUnrelatedText(t *testing.T) {
 		}
 	}
 }
-
 func TestOpenVPNReadyPatterns(t *testing.T) {
 	tests := []struct {
 		log  string
@@ -46,7 +43,6 @@ func TestOpenVPNReadyPatterns(t *testing.T) {
 		}
 	}
 }
-
 func TestOpenConnectReadyPatternIdentifiesOwnedInterface(t *testing.T) {
 	if name := InterfaceFromLogData([]byte("VPNTORIS_INTERFACE=utun9\n"), fortihelper.ProtocolOpenConnect); name != "utun9" {
 		t.Fatalf("got %q", name)
@@ -55,7 +51,6 @@ func TestOpenConnectReadyPatternIdentifiesOwnedInterface(t *testing.T) {
 		t.Fatalf("got %q", name)
 	}
 }
-
 func TestOpenVPNChallengeCredentials(t *testing.T) {
 	tests := []struct {
 		challenge string
@@ -75,19 +70,16 @@ func TestOpenVPNChallengeCredentials(t *testing.T) {
 		}
 	}
 }
-
 func TestManagementEscape(t *testing.T) {
 	if value := managementEscape(`test\"value`); value != `test\\\"value` {
 		t.Fatalf("unexpected escaped value: %q", value)
 	}
 }
-
 func TestNewRequiresEngineRoot(t *testing.T) {
 	if _, err := New(Config{}); err == nil {
 		t.Fatal("expected missing engine root to fail")
 	}
 }
-
 func TestPrepareRuntimeCreatesDirectories(t *testing.T) {
 	root := t.TempDir()
 	logDirectory := filepath.Join(root, "log")
@@ -116,7 +108,6 @@ func TestPrepareRuntimeCreatesDirectories(t *testing.T) {
 		t.Fatalf("ProfileLog = %q", got)
 	}
 }
-
 func TestHandleRejectsInvalidRequest(t *testing.T) {
 	service, err := New(Config{EngineRoot: t.TempDir(), Router: memoryRouter{}})
 	if err != nil {
@@ -127,7 +118,6 @@ func TestHandleRejectsInvalidRequest(t *testing.T) {
 		t.Fatalf("expected validation failure, got %#v", response)
 	}
 }
-
 func TestStopAndStatusForUnknownProfile(t *testing.T) {
 	service, err := New(Config{EngineRoot: t.TempDir(), Router: memoryRouter{}})
 	if err != nil {
@@ -140,7 +130,6 @@ func TestStopAndStatusForUnknownProfile(t *testing.T) {
 		t.Fatalf("stop = %#v", response)
 	}
 }
-
 func TestResetClearsSessions(t *testing.T) {
 	service, err := New(Config{EngineRoot: t.TempDir(), Router: memoryRouter{}})
 	if err != nil {
@@ -154,7 +143,6 @@ func TestResetClearsSessions(t *testing.T) {
 		t.Fatalf("sessions not cleared: %#v", service.sessions)
 	}
 }
-
 func TestSendOTPRequiresWaitingSession(t *testing.T) {
 	service, err := New(Config{EngineRoot: t.TempDir(), Router: memoryRouter{}})
 	if err != nil {
@@ -165,7 +153,6 @@ func TestSendOTPRequiresWaitingSession(t *testing.T) {
 		t.Fatalf("expected failure, got %#v", response)
 	}
 }
-
 func TestStopDeletesOwnedRoutes(t *testing.T) {
 	router := &recordingRouter{}
 	service, err := New(Config{EngineRoot: t.TempDir(), Router: router})
@@ -205,7 +192,6 @@ func (router *recordingRouter) AddRoutes(interfaceName string, routes []string) 
 	}
 	return nil
 }
-
 func (router *recordingRouter) DeleteRoutes(interfaceName string, routes []string) {
 	for _, route := range routes {
 		router.deleted = append(router.deleted, interfaceName+":"+route)

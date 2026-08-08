@@ -6,10 +6,7 @@ import (
 	"strings"
 )
 
-// Runner executes an external command and returns combined output.
 type Runner func(name string, args ...string) ([]byte, error)
-
-// commandRouter implements Router by invoking platform route commands through Runner.
 type commandRouter struct {
 	run    Runner
 	add    func(interfaceName, route string) (name string, args []string)
@@ -39,7 +36,6 @@ func (router commandRouter) AddRoutes(interfaceName string, routes []string) err
 	}
 	return nil
 }
-
 func (router commandRouter) DeleteRoutes(interfaceName string, routes []string) {
 	if interfaceName == "" || router.run == nil || router.remove == nil {
 		return
@@ -49,7 +45,6 @@ func (router commandRouter) DeleteRoutes(interfaceName string, routes []string) 
 		_, _ = router.run(name, args...)
 	}
 }
-
 func validateRouteCIDR(route string) error {
 	prefix, err := netip.ParsePrefix(strings.TrimSpace(route))
 	if err != nil || !prefix.Addr().Is4() {

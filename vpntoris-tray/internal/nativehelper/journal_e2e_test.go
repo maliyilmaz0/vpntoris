@@ -5,7 +5,6 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
-
 	"vpntoris-tray/internal/fortihelper"
 	"vpntoris-tray/internal/nativeengine"
 	"vpntoris-tray/internal/netbackend"
@@ -54,8 +53,6 @@ func TestApplyNetworkJournalsAndRecover(t *testing.T) {
 	if err != nil || len(listed) != 1 {
 		t.Fatalf("journal list = %d %v", len(listed), err)
 	}
-
-	// Simulate crash: new service with same journal recovers owned routes.
 	router2 := &recordingRouter{}
 	manager2, err := nativeengine.NewManager(journal, netbackend.MutationBackend{Router: router2})
 	if err != nil {
@@ -87,7 +84,6 @@ func TestApplyNetworkJournalsAndRecover(t *testing.T) {
 	}
 	_ = os.RemoveAll(root)
 }
-
 func TestStopDeactivatesJournalTransaction(t *testing.T) {
 	root := t.TempDir()
 	router := &recordingRouter{}

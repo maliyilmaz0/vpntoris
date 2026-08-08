@@ -1,40 +1,4 @@
 #!/bin/bash
-# VPNToris local release builder (this machine only).
-#
-# Maintainer-host release builder:
-#   - macOS host (Apple Silicon OK)
-#   - Linux packages built via Docker (dpkg-deb / rpmbuild inside containers)
-#   - Windows PE cross-compiled here, Authenticode via SafeNet + osslsigncode
-#   - macOS app/PKG via scripts/release.sh
-#
-# Usage:
-#   ./build.sh 2.0.0
-#   ./build.sh 2.0.0 linux
-#   ./build.sh 2.0.0 windows    # complete MSI only (PE + engines)
-#   ./build.sh 2.0.0 darwin     # complete PKG only (app + engines); never app-only .pkg
-#   ./build.sh 2.0.0 all --skip-sign
-#
-# Product policy (all platforms):
-#   Engines are a required product layer. Ship only complete installers:
-#     macOS  → *-universal-complete.pkg
-#     Linux  → DEB/RPM with engines
-#     Windows→ *-windows-amd64.msi with engines
-#   No app-only / exe-only / engine-skipped release artifacts.
-#
-# Env (.env loaded automatically):
-#   LINUX_ARCHS=amd64 arm64     # default: amd64 arm64
-#   SIGN_WINDOWS=true           # enable SafeNet Authenticode (PE + MSI)
-#   SAFENET_PIN=...             # required when SIGN_WINDOWS=true
-#   SIGN_PKCS11_MODULE / SIGN_PKCS11_KEY / SIGN_CERT_FILE
-#   VPNTORIS_MACOS_* identities for darwin packaging
-#   VPNTORIS_MACOS_NOTARY_PROFILE / NOTARY_PROFILE  (keychain profile name)
-#   APPLE_TEAM_ID=...
-#
-# Output layout:
-#   versions/<ver>/macos/   complete.pkg
-#   versions/<ver>/linux/   .deb .rpm
-#   versions/<ver>/windows/ complete.msi
-#
 set -euo pipefail
 
 ROOT_DIR=$(cd "$(dirname "$0")" && pwd)
@@ -97,7 +61,6 @@ if [[ $# -gt 0 && $1 != --* ]]; then
   shift || true
 fi
 
-# Optional mode token after platform: "dev"
 DEV_MODE=false
 if [[ $# -gt 0 && $1 == "dev" ]]; then
   DEV_MODE=true
@@ -137,7 +100,6 @@ for arg in "$@"; do
   esac
 done
 
-# Dev builds never codesign with Developer ID or notarize / Authenticode.
 if [[ $DEV_MODE == true ]]; then
   SKIP_SIGN=true
   SKIP_NOTARIZE=true
@@ -145,7 +107,6 @@ if [[ $DEV_MODE == true ]]; then
   echo "[build] DEV mode: no Developer ID codesign, no notarization, no Authenticode"
 fi
 
-# ─── Host gate: builds are taken only from this macOS machine ─────
 if [[ $(uname -s) != "Darwin" ]]; then
   echo "error: build.sh is designed for the maintainer macOS host only (got $(uname -s))" >&2
   exit 1
@@ -153,7 +114,6 @@ fi
 
 if [[ -f "$ROOT_DIR/.env" ]]; then
   set -a
-  # shellcheck disable=SC1091
   source "$ROOT_DIR/.env"
   set +a
 fi
@@ -163,7 +123,6 @@ BUILD_TIME=$(date -u '+%Y-%m-%dT%H:%M:%SZ')
 HOST_ARCH=$(uname -m)
 GO_VERSION=$(go version 2>/dev/null | awk '{print $3}' || echo unknown)
 
-# macOS notary — profile/team come from the environment only (no private defaults).
 APPLE_TEAM_ID=${APPLE_TEAM_ID:-}
 if [[ -z ${VPNTORIS_MACOS_NOTARY_PROFILE:-} ]]; then
   VPNTORIS_MACOS_NOTARY_PROFILE=${NOTARY_PROFILE:-}
@@ -171,13 +130,10 @@ fi
 NOTARY_PROFILE=${VPNTORIS_MACOS_NOTARY_PROFILE}
 
 if [[ -n $LINUX_ARCHS_OVERRIDE ]]; then
-  # shellcheck disable=SC2206
   LINUX_ARCHS=($LINUX_ARCHS_OVERRIDE)
 elif [[ -n ${LINUX_ARCHS:-} ]]; then
-  # shellcheck disable=SC2206
   LINUX_ARCHS=($LINUX_ARCHS)
 else
-  # Ship both arches by default when building from this machine.
   LINUX_ARCHS=(amd64 arm64)
 fi
 
@@ -204,7 +160,6 @@ echo "out:       $VERSION_OUT"
 echo "linux:     ${LINUX_ARCHS[*]}"
 echo
 
-# ─── Tests ────────────────────────────────────────────────────────
 run_tests() {
   if [[ $SKIP_TESTS == true ]]; then
     echo "[test] skipped"
@@ -214,9 +169,6 @@ run_tests() {
   (cd "$ROOT_DIR/vpntoris-tray" && go test ./...)
 }
 
-# ─── Darwin complete PKG (release: signed+notarized; dev: unsigned local) ─
-# App-only universal.pkg / DMG / engine-only PKG are intermediate build steps.
-# Drop: versions/<ver>/macos/*-universal-complete.pkg only.
 build_darwin() {
   if [[ $DEV_MODE == true ]]; then
     echo "[darwin] DEV complete PKG (app + engines, no Developer ID / notary)..."
@@ -324,7 +276,6 @@ build_darwin() {
   fi
   shasum -a 256 "$complete_pkg" >"$complete_pkg.sha256"
 
-  # Notarize + staple complete PKG only (never in dev).
   if [[ $DEV_MODE == false && $SKIP_NOTARIZE == false ]]; then
     echo "[darwin] notarizing complete package (notarytool --wait)..."
     local notary_log="$BUILD_ROOT/notary-complete-$VERSION.log"
@@ -357,7 +308,6 @@ build_darwin() {
     shasum -a 256 "$complete_pkg" >"$complete_pkg.sha256"
   fi
 
-  # Product drop: versions/<ver>/macos/ only
   cp -f "$complete_pkg" "$VERSION_MACOS/"
   cp -f "$complete_pkg.sha256" "$VERSION_MACOS/"
   if [[ -f $ROOT_DIR/dist/VPNToris-sbom.txt ]]; then
@@ -380,7 +330,6 @@ build_darwin() {
   echo
 }
 
-# Install unsigned complete-dev.pkg and launch the app (local iteration only).
 install_darwin_dev() {
   local pkg=$1
   local app=/Applications/VPNToris.app
@@ -393,12 +342,10 @@ install_darwin_dev() {
   require_cmd installer
   require_cmd open
 
-  # Stop running UI/daemon so the package can replace binaries.
   /usr/bin/pkill -x VPNToris 2>/dev/null || true
   /usr/bin/pkill -x vpntorisd 2>/dev/null || true
   sleep 0.5
 
-  # sudo keeps a short credential cache so one password prompt covers the rest.
   if ! sudo -v; then
     echo "error: sudo required to install the dev package" >&2
     exit 1
@@ -413,11 +360,7 @@ install_darwin_dev() {
   sudo /usr/bin/xattr -dr com.apple.quarantine "$app" 2>/dev/null || true
   sudo /usr/bin/xattr -dr com.apple.quarantine "$helper" "$engines" 2>/dev/null || true
 
-  # release.sh --unsigned leaves Mach-Os with no signature. launchd then fails with
-  # RBSRequestErrorDomain Code=5 / POSIX 163 ("Launchd job spawn failed").
-  # Ad-hoc sign the app bundle + nested binaries so local open works without Developer ID.
   if [[ -d $app ]]; then
-    # Sign nested helpers first, then the outer bundle.
     for bin in tun2socks vpntoris-route-helper vpntorisd vpntorisctl VPNToris; do
       if [[ -f $app/Contents/MacOS/$bin ]]; then
         sudo /usr/bin/codesign --force --sign - "$app/Contents/MacOS/$bin" 2>/dev/null || true
@@ -434,7 +377,6 @@ install_darwin_dev() {
     sudo /bin/chmod 0755 "$helper" 2>/dev/null || true
     sudo /usr/bin/codesign --force --sign - "$helper" 2>/dev/null || true
   fi
-  # Engines were ad-hoc signed at package time; re-sign helper-adjacent bits if present.
   if [[ -d $engines ]]; then
     sudo /usr/bin/find "$engines" -type f \( -perm -111 -o -name '*.dylib' -o -name '*.so' \) -print0 2>/dev/null \
       | while IFS= read -r -d '' f; do
@@ -450,14 +392,12 @@ install_darwin_dev() {
     sudo /bin/chmod 0644 "$plist" 2>/dev/null || true
     sudo /bin/launchctl bootout "system/$label" 2>/dev/null || true
     if ! sudo /bin/launchctl bootstrap system "$plist" 2>/dev/null; then
-      # Already loaded or race — try kickstart
       sudo /bin/launchctl kickstart -k "system/$label" 2>/dev/null || true
     else
       sudo /bin/launchctl enable "system/$label" 2>/dev/null || true
     fi
   fi
 
-  # Symlinks for CLI (best-effort; may already exist).
   if [[ -x $app/Contents/MacOS/vpntorisctl ]]; then
     sudo /bin/mkdir -p /usr/local/bin /opt/homebrew/bin 2>/dev/null || true
     sudo /bin/ln -sfn "$app/Contents/MacOS/vpntorisctl" /usr/local/bin/vpntorisctl 2>/dev/null || true
@@ -469,7 +409,6 @@ install_darwin_dev() {
     exit 1
   fi
 
-  # Ensure ownership allows the console user to launch (pkg may install as root:wheel).
   local console_user
   console_user=$(/usr/bin/stat -f %Su /dev/console 2>/dev/null || echo "$(id -un)")
   if [[ -n $console_user && $console_user != root && $console_user != loginwindow ]]; then
@@ -477,7 +416,6 @@ install_darwin_dev() {
   fi
 
   echo "[darwin-dev] opening VPNToris..."
-  # Prefer direct exec path if open fails under some launch policies.
   if ! /usr/bin/open -a "$app" 2>/dev/null; then
     if ! /usr/bin/open "$app" 2>/dev/null; then
       echo "[darwin-dev] open failed; launching binary directly..."
@@ -503,7 +441,6 @@ install_darwin_dev() {
   fi
 }
 
-# ─── Linux (Docker) ───────────────────────────────────────────────
 build_linux() {
   echo "[linux] Docker-based packages for: ${LINUX_ARCHS[*]}"
   require_cmd docker
@@ -515,12 +452,10 @@ build_linux() {
 
   for arch in "${LINUX_ARCHS[@]}"; do
     echo "[linux] --- GOARCH=$arch ---"
-    # Engines are a required product layer (same as macOS complete.pkg / Windows MSI).
     VERSION="$VERSION" GOARCH="$arch" \
       "$SCRIPTS/linux/build-packages.sh"
 
     local out="$BUILD_ROOT/linux/$arch"
-    # Shippable product only under versions/<ver>/linux/
     if compgen -G "$out/*.deb" >/dev/null; then
       cp -f "$out"/*.deb "$VERSION_LINUX/"
     else
@@ -553,7 +488,6 @@ build_linux() {
   echo
 }
 
-# ─── Windows (complete MSI + engines, same role as macOS complete.pkg) ─
 build_windows() {
   echo "[windows] complete MSI (PE + required engines) on macOS..."
   require_cmd go
@@ -561,7 +495,6 @@ build_windows() {
   local out="$BUILD_ROOT/windows"
   mkdir -p "$out"
 
-  # Ergonomics: SAFENET_PIN alone enables signing (SIGN_WINDOWS defaults true in .env).
   if [[ -n ${SAFENET_PIN:-} && ${SIGN_WINDOWS:-} != "false" ]]; then
     SIGN_WINDOWS=true
   fi
@@ -580,11 +513,9 @@ build_windows() {
     pack_args+=(--skip-sign)
   fi
 
-  # Always: PE + engines + complete MSI. No app-only path.
   OUT_DIR="$out" VERSION="$VERSION" SIGN_WINDOWS="${SIGN_WINDOWS:-false}" \
     "$SCRIPTS/windows/build-and-sign.sh" "${pack_args[@]+"${pack_args[@]}"}"
 
-  # Shippable product only under versions/<ver>/windows/
   mkdir -p "$VERSION_WINDOWS"
   local msi_found=false
   for f in "$out"/*-windows-amd64.msi; do
@@ -611,7 +542,6 @@ build_windows() {
   echo
 }
 
-# ─── Manifest ─────────────────────────────────────────────────────
 write_manifest() {
   local manifest="$VERSION_OUT/BUILD_MANIFEST.txt"
   {
@@ -634,7 +564,6 @@ write_manifest() {
   echo "[manifest] $manifest"
 }
 
-# ─── Run ──────────────────────────────────────────────────────────
 run_tests
 
 case "$PLATFORM" in

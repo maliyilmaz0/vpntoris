@@ -9,11 +9,9 @@ import (
 )
 
 func main() {
-	// Mimic vpntoris-vpnc-script output that the helper watches for.
 	fmt.Fprintln(os.Stdout, "VPNTORIS_INTERFACE=tun8")
 	_ = os.Stdout.Sync()
 	if len(os.Args) > 1 {
-		// Keep credentials off argv in production; here we only stay alive.
 		_ = os.Args
 	}
 	signals := make(chan os.Signal, 1)

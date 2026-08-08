@@ -18,7 +18,6 @@ import (
 	"strings"
 	"sync"
 	"time"
-
 	"vpntoris-tray/internal/runtimepaths"
 )
 
@@ -47,7 +46,6 @@ type VPNConfig struct {
 	ExternalBrowser     bool         `json:"externalBrowser,omitempty"`
 	IPSec               *IPSecConfig `json:"ipsec,omitempty"`
 }
-
 type IPSecConfig struct {
 	IKEVersion      int             `json:"ikeVersion"`
 	IKEMode         string          `json:"ikeMode"`
@@ -79,7 +77,6 @@ type IPSecConfig struct {
 	RemoteSelectors string          `json:"remoteSelectors"`
 	Phase2Proposals []IPSecProposal `json:"phase2Proposals,omitempty"`
 }
-
 type IPSecProposal struct {
 	Encryption     string `json:"encryption"`
 	Authentication string `json:"authentication"`
@@ -94,7 +91,6 @@ var proxyState = struct {
 	mappings map[string]proxyMapping
 	revision uint64
 }{mappings: make(map[string]proxyMapping)}
-
 var dockerBootstrap = struct {
 	sync.RWMutex
 	State   string `json:"state"`
@@ -110,7 +106,6 @@ type trafficSnapshot struct {
 	Duration   int64   `json:"duration"`
 	updatedAt  time.Time
 }
-
 type historyEntry struct {
 	ID       string `json:"id"`
 	Profile  string `json:"profile"`
@@ -119,7 +114,6 @@ type historyEntry struct {
 	Received uint64 `json:"received"`
 	Sent     uint64 `json:"sent"`
 }
-
 type activeFlow struct {
 	ID       string `json:"id"`
 	Profile  string `json:"profile"`
@@ -131,12 +125,10 @@ type activeFlow struct {
 	Port     int    `json:"port"`
 	Protocol string `json:"protocol"`
 }
-
 type analyticsTraffic struct {
 	Received uint64 `json:"received"`
 	Sent     uint64 `json:"sent"`
 }
-
 type analyticsProfile struct {
 	Name         string                      `json:"name"`
 	Received     uint64                      `json:"received"`
@@ -164,7 +156,6 @@ var trafficState = struct {
 	sync.RWMutex
 	items map[string]trafficSnapshot
 }{items: make(map[string]trafficSnapshot)}
-
 var connectionIntent = struct {
 	sync.RWMutex
 	names    map[string]bool
@@ -182,12 +173,10 @@ var gatewayState = struct {
 	loaded bool
 	items  map[string]gatewayRecord
 }{items: make(map[string]gatewayRecord)}
-
 var routeProgress = struct {
 	sync.RWMutex
 	items map[string]string
 }{items: make(map[string]string)}
-
 var otpRequests = struct {
 	sync.RWMutex
 	names map[string]bool
@@ -197,7 +186,6 @@ type proxyMapping struct {
 	port   string
 	routes []proxyRoute
 }
-
 type proxyRoute struct {
 	network string
 	mask    string
@@ -236,7 +224,6 @@ func main() {
 	}
 	select {}
 }
-
 func dockerPath() string {
 	if path, err := exec.LookPath("docker"); err == nil {
 		return path
@@ -248,7 +235,6 @@ func dockerPath() string {
 	}
 	return ""
 }
-
 func dockerCommand(arguments ...string) *exec.Cmd {
 	docker := dockerPath()
 	if docker == "" {
@@ -272,14 +258,12 @@ func dockerCommand(arguments ...string) *exec.Cmd {
 	command.Env = append(command.Env, "PATH="+strings.Join(path, string(os.PathListSeparator)))
 	return command
 }
-
 func setDockerBootstrap(state, message string) {
 	dockerBootstrap.Lock()
 	dockerBootstrap.State = state
 	dockerBootstrap.Message = message
 	dockerBootstrap.Unlock()
 }
-
 func bootstrapDockerImage() {
 	docker := dockerPath()
 	if docker == "" {
@@ -320,7 +304,6 @@ func bootstrapDockerImage() {
 	}
 	setDockerBootstrap("ready", "Docker image is ready.")
 }
-
 func proxyPort(container string) (string, error) {
 	output, err := dockerCommand("port", container, "1080/tcp").Output()
 	if err != nil {
@@ -333,7 +316,6 @@ func proxyPort(container string) (string, error) {
 	}
 	return address[separator+1:], nil
 }
-
 func containerPort(container, target string) (int, error) {
 	docker := dockerPath()
 	if docker == "" {
@@ -350,7 +332,6 @@ func containerPort(container, target string) (int, error) {
 	}
 	return strconv.Atoi(address[separator+1:])
 }
-
 func splitValues(value string) []string {
 	fields := strings.FieldsFunc(value, func(character rune) bool {
 		return character == ',' || character == ';' || character == '\n' || character == ' '
@@ -363,7 +344,6 @@ func splitValues(value string) []string {
 	}
 	return result
 }
-
 func resolveDomains(config VPNConfig) []string {
 	addresses := map[string]bool{}
 	for _, domain := range splitValues(config.Domains) {
@@ -385,7 +365,6 @@ func resolveDomains(config VPNConfig) []string {
 	sort.Strings(result)
 	return result
 }
-
 func activateProfileRoutes(config VPNConfig, port string) error {
 	routeList := config.Routes
 	for _, server := range splitValues(config.DNSServers) {
@@ -400,11 +379,9 @@ func activateProfileRoutes(config VPNConfig, port string) error {
 	}
 	return setSystemRoutesWithDNS(containerName(config.Name), port, routeList, config.Domains, dnsPort, true)
 }
-
 func setSystemRoutes(key, port, routeList string, enabled bool) error {
 	return setSystemRoutesWithDNS(key, port, routeList, "", 0, enabled)
 }
-
 func setSystemRoutesWithDNS(key, port, routeList, domains string, dnsPort int, enabled bool) error {
 	routes, err := parseRoutes(routeList)
 	if enabled && err != nil {
@@ -430,7 +407,6 @@ func setSystemRoutesWithDNS(key, port, routeList, domains string, dnsPort int, e
 	proxyEnabled := len(proxyState.mappings) > 0
 	revision := proxyState.revision
 	proxyState.Unlock()
-
 	output, err := exec.Command("networksetup", "-listallnetworkservices").Output()
 	if err != nil {
 		return fmt.Errorf("could not list macOS network services: %w", err)
@@ -464,7 +440,6 @@ type routerRequest struct {
 	Domains []string `json:"domains"`
 	DNSPort int      `json:"dnsPort"`
 }
-
 type routerOperationError struct {
 	message string
 }
@@ -472,7 +447,6 @@ type routerOperationError struct {
 func (err routerOperationError) Error() string {
 	return err.message
 }
-
 func runRootRouter(key, port string, routes []proxyRoute, domains []string, dnsPort int, enabled bool) error {
 	portNumber := 0
 	if enabled {
@@ -503,7 +477,6 @@ func runRootRouter(key, port string, routes []proxyRoute, domains []string, dnsP
 	command := fmt.Sprintf("sudo %s install \"$(id -u)\"", shellQuote(helper))
 	return fmt.Errorf("routing helper is unavailable (%v). Run once in Terminal: %s", requestError, command)
 }
-
 func sendRouterRequest(request routerRequest) error {
 	socket := runtimepaths.Current().RouterSocket
 	if socket == "" {
@@ -528,11 +501,9 @@ func sendRouterRequest(request routerRequest) error {
 	}
 	return nil
 }
-
 func shellQuote(value string) string {
 	return "'" + strings.ReplaceAll(value, "'", "'\\''") + "'"
 }
-
 func parseRoutes(value string) ([]proxyRoute, error) {
 	fields := strings.FieldsFunc(value, func(character rune) bool {
 		return character == ',' || character == ';' || character == '\n'
@@ -552,7 +523,6 @@ func parseRoutes(value string) ([]proxyRoute, error) {
 	}
 	return routes, nil
 }
-
 func startPACServer() error {
 	listener, err := net.Listen("tcp", pacAddress)
 	if err != nil {
@@ -607,7 +577,6 @@ func startPACServer() error {
 	go monitorActiveProxy()
 	return nil
 }
-
 func handleResetAPI(response http.ResponseWriter, request *http.Request) {
 	if request.Header.Get("Origin") != "" {
 		http.Error(response, "browser requests are not allowed", http.StatusForbidden)
@@ -623,7 +592,6 @@ func handleResetAPI(response http.ResponseWriter, request *http.Request) {
 	}
 	response.WriteHeader(http.StatusNoContent)
 }
-
 func resetAllConnections() error {
 	configs, err := loadConfigs()
 	if err != nil {
@@ -637,7 +605,6 @@ func resetAllConnections() error {
 	otpRequests.Lock()
 	otpRequests.names = make(map[string]bool)
 	otpRequests.Unlock()
-
 	for _, config := range configs {
 		_ = setSystemRoutes(containerName(config.Name), "", "", false)
 		setRouteStatus(config.Name, "")
@@ -656,7 +623,6 @@ func resetAllConnections() error {
 	proxyState.Unlock()
 	return nil
 }
-
 func handleDiagnosticsAPI(response http.ResponseWriter, _ *http.Request) {
 	buffer := &bytes.Buffer{}
 	archive := zip.NewWriter(buffer)
@@ -682,14 +648,14 @@ func handleDiagnosticsAPI(response http.ResponseWriter, _ *http.Request) {
 	trafficState.RUnlock()
 	paths := runtimepaths.Current()
 	summary := struct {
-		Created  string            `json:"created"`
-		Version  string            `json:"version"`
-		OS       string            `json:"os"`
-		Arch     string            `json:"arch"`
+		Created  string             `json:"created"`
+		Version  string             `json:"version"`
+		OS       string             `json:"os"`
+		Arch     string             `json:"arch"`
 		Paths    runtimepaths.Paths `json:"paths"`
-		Docker   any               `json:"docker"`
-		Profiles []VPNConfig       `json:"profiles"`
-		Traffic  []trafficSnapshot `json:"traffic"`
+		Docker   any                `json:"docker"`
+		Profiles []VPNConfig        `json:"profiles"`
+		Traffic  []trafficSnapshot  `json:"traffic"`
 	}{time.Now().Format(time.RFC3339), "next", runtime.GOOS, runtime.GOARCH, paths, dockerStatus, configs, traffic}
 	data, _ := json.MarshalIndent(summary, "", "  ")
 	writeDiagnosticFile(archive, "summary.json", data)
@@ -717,7 +683,6 @@ func handleDiagnosticsAPI(response http.ResponseWriter, _ *http.Request) {
 	response.Header().Set("Cache-Control", "no-store")
 	_, _ = response.Write(buffer.Bytes())
 }
-
 func writeDiagnosticCommand(archive *zip.Writer, name, command string, arguments ...string) {
 	output, err := exec.Command(command, arguments...).CombinedOutput()
 	if err != nil {
@@ -725,14 +690,12 @@ func writeDiagnosticCommand(archive *zip.Writer, name, command string, arguments
 	}
 	writeDiagnosticFile(archive, name, []byte(sanitizeDiagnosticText(string(output))))
 }
-
 func writeDiagnosticFile(archive *zip.Writer, name string, data []byte) {
 	file, err := archive.Create(name)
 	if err == nil {
 		_, _ = file.Write(data)
 	}
 }
-
 func safeFileName(value string) string {
 	name := safeNamePattern.ReplaceAllString(strings.ToLower(value), "-")
 	if name == "" {
@@ -740,7 +703,6 @@ func safeFileName(value string) string {
 	}
 	return name
 }
-
 func sanitizeDiagnosticText(value string) string {
 	patterns := []*regexp.Regexp{
 		regexp.MustCompile(`(?i)(password|passwd|secret|psk|token|otp|authorization)(\s*[=:]\s*|\s+)[^\s,;]+`),
@@ -751,7 +713,6 @@ func sanitizeDiagnosticText(value string) string {
 	}
 	return value
 }
-
 func handleFlowsAPI(response http.ResponseWriter, _ *http.Request) {
 	flows, err := currentFlows()
 	if err != nil {
@@ -761,7 +722,6 @@ func handleFlowsAPI(response http.ResponseWriter, _ *http.Request) {
 	response.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(response).Encode(flows)
 }
-
 func currentFlows() ([]activeFlow, error) {
 	output, err := exec.Command("/usr/sbin/lsof", "-nP", "-iTCP", "-sTCP:ESTABLISHED", "-FpcnT").Output()
 	if err != nil {
@@ -769,12 +729,10 @@ func currentFlows() ([]activeFlow, error) {
 	}
 	return parseFlows(string(output)), nil
 }
-
 func analyticsPath() string { return filepath.Join(filepath.Dir(configPath), "analytics.json") }
 func analyticsSettingsPath() string {
 	return filepath.Join(filepath.Dir(configPath), "analytics-settings.json")
 }
-
 func loadAnalyticsSettings() analyticsSettings {
 	settings := analyticsSettings{HourlyDays: 7, DailyDays: 90}
 	if data, err := os.ReadFile(analyticsSettingsPath()); err == nil {
@@ -788,7 +746,6 @@ func loadAnalyticsSettings() analyticsSettings {
 	}
 	return settings
 }
-
 func loadAnalyticsLocked() {
 	if analyticsState.loaded {
 		return
@@ -802,7 +759,6 @@ func loadAnalyticsLocked() {
 		analyticsState.profiles = make(map[string]*analyticsProfile)
 	}
 }
-
 func analyticsProfileLocked(name string) *analyticsProfile {
 	loadAnalyticsLocked()
 	profile := analyticsState.profiles[name]
@@ -824,7 +780,6 @@ func analyticsProfileLocked(name string) *analyticsProfile {
 	}
 	return profile
 }
-
 func saveAnalyticsLocked(force bool) {
 	if !force && time.Since(analyticsState.lastSave) < 30*time.Second {
 		return
@@ -835,7 +790,6 @@ func saveAnalyticsLocked(force bool) {
 		analyticsState.lastSave = time.Now()
 	}
 }
-
 func recordTrafficAnalytics(name string, received, sent uint64) {
 	if received == 0 && sent == 0 {
 		return
@@ -871,14 +825,12 @@ func recordTrafficAnalytics(name string, received, sent uint64) {
 	}
 	saveAnalyticsLocked(false)
 }
-
 func recordReconnectAnalytics(name string) {
 	analyticsState.Lock()
 	defer analyticsState.Unlock()
 	analyticsProfileLocked(name).Reconnects++
 	saveAnalyticsLocked(true)
 }
-
 func monitorAnalyticsFlows() {
 	for {
 		time.Sleep(30 * time.Second)
@@ -896,7 +848,6 @@ func monitorAnalyticsFlows() {
 		analyticsState.Unlock()
 	}
 }
-
 func handleAnalyticsAPI(response http.ResponseWriter, request *http.Request) {
 	analyticsState.Lock()
 	defer analyticsState.Unlock()
@@ -915,7 +866,6 @@ func handleAnalyticsAPI(response http.ResponseWriter, request *http.Request) {
 	response.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(response).Encode(profiles)
 }
-
 func handleAnalyticsSettingsAPI(response http.ResponseWriter, request *http.Request) {
 	settings := loadAnalyticsSettings()
 	if request.Method == http.MethodPost {
@@ -933,7 +883,6 @@ func handleAnalyticsSettingsAPI(response http.ResponseWriter, request *http.Requ
 	response.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(response).Encode(settings)
 }
-
 func parseFlows(output string) []activeFlow {
 	configs, _ := loadConfigs()
 	type configuredRoute struct {
@@ -998,7 +947,6 @@ func parseFlows(output string) []activeFlow {
 	})
 	return flows
 }
-
 func handleRecoverAPI(response http.ResponseWriter, request *http.Request) {
 	if request.Header.Get("Origin") != "" {
 		http.Error(response, "browser requests are not allowed", http.StatusForbidden)
@@ -1012,7 +960,6 @@ func handleRecoverAPI(response http.ResponseWriter, request *http.Request) {
 	go restoreHealthyRoutes()
 	response.WriteHeader(http.StatusNoContent)
 }
-
 func handleTrafficAPI(response http.ResponseWriter, _ *http.Request) {
 	trafficState.RLock()
 	items := make([]trafficSnapshot, 0, len(trafficState.items))
@@ -1024,7 +971,6 @@ func handleTrafficAPI(response http.ResponseWriter, _ *http.Request) {
 	response.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(response).Encode(items)
 }
-
 func monitorTraffic() {
 	for {
 		configs, _ := loadConfigs()
@@ -1076,7 +1022,6 @@ func monitorTraffic() {
 		time.Sleep(time.Second)
 	}
 }
-
 func updateTrafficSnapshot(name string, received uint64, sent uint64, duration int64) {
 	now := time.Now()
 	trafficState.Lock()
@@ -1095,7 +1040,6 @@ func updateTrafficSnapshot(name string, received uint64, sent uint64, duration i
 	}
 	trafficState.items[name] = item
 }
-
 func containerTraffic(container string) (uint64, uint64, error) {
 	docker := dockerPath()
 	if docker == "" {
@@ -1116,7 +1060,6 @@ func containerTraffic(container string) (uint64, uint64, error) {
 	sent, err := parseByteSize(parts[1])
 	return received, sent, err
 }
-
 func parseByteSize(value string) (uint64, error) {
 	value = strings.TrimSpace(value)
 	index := 0
@@ -1153,7 +1096,6 @@ func parseByteSize(value string) (uint64, error) {
 	}
 	return uint64(number * multiplier), nil
 }
-
 func containerDuration(container string) int64 {
 	docker := dockerPath()
 	if docker == "" {
@@ -1169,7 +1111,6 @@ func containerDuration(container string) int64 {
 	}
 	return int64(time.Since(started).Seconds())
 }
-
 func handleDockerAPI(response http.ResponseWriter, request *http.Request) {
 	if request.Method == http.MethodPost {
 		dockerBootstrap.RLock()
@@ -1188,7 +1129,6 @@ func handleDockerAPI(response http.ResponseWriter, request *http.Request) {
 	response.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(response).Encode(status)
 }
-
 func monitorActiveProxy() {
 	failures := map[string]int{}
 	for {
@@ -1214,7 +1154,6 @@ func monitorActiveProxy() {
 		}
 	}
 }
-
 func restoreHealthyRoutes() {
 	time.Sleep(time.Second)
 	configs, err := loadConfigs()
@@ -1253,9 +1192,6 @@ type profileView struct {
 }
 
 func handleProfilesAPI(response http.ResponseWriter, request *http.Request) {
-	// The loopback API is consumed by the tray/CLI only, which never send an
-	// Origin header. Rejecting browser-originated requests blocks cross-origin
-	// pages from reading or mutating profiles (CSRF / DNS rebinding).
 	if request.Header.Get("Origin") != "" {
 		http.Error(response, "browser requests are not allowed", http.StatusForbidden)
 		return
@@ -1271,14 +1207,12 @@ func handleProfilesAPI(response http.ResponseWriter, request *http.Request) {
 		http.Error(response, "method not allowed", http.StatusMethodNotAllowed)
 	}
 }
-
 func handleProfilesGet(response http.ResponseWriter, request *http.Request) {
 	configs, err := loadConfigs()
 	if err != nil {
 		http.Error(response, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	// Full config for editing (secrets stripped).
 	if name := strings.TrimSpace(request.URL.Query().Get("name")); name != "" {
 		for _, config := range configs {
 			if config.Name != name {
@@ -1323,7 +1257,6 @@ func handleProfilesGet(response http.ResponseWriter, request *http.Request) {
 	response.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(response).Encode(profiles)
 }
-
 func handleProfilesSave(response http.ResponseWriter, request *http.Request) {
 	var config VPNConfig
 	if err := json.NewDecoder(request.Body).Decode(&config); err != nil {
@@ -1350,7 +1283,6 @@ func handleProfilesSave(response http.ResponseWriter, request *http.Request) {
 	if replace == "" {
 		replace = config.Name
 	}
-	// Never persist secrets in the shared config file; tray/keychain supplies them at connect.
 	config.Password = ""
 	if config.IPSec != nil {
 		copyIPSec := *config.IPSec
@@ -1361,11 +1293,9 @@ func handleProfilesSave(response http.ResponseWriter, request *http.Request) {
 		http.Error(response, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	// Echo back without secrets; callers keep password/psk in their secret store.
 	response.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(response).Encode(config)
 }
-
 func handleProfilesDelete(response http.ResponseWriter, request *http.Request) {
 	name := strings.TrimSpace(request.URL.Query().Get("name"))
 	if name == "" {
@@ -1426,7 +1356,6 @@ func openConnectProtocol(config VPNConfig) string {
 	}
 	return value
 }
-
 func handleActionAPI(response http.ResponseWriter, request *http.Request) {
 	if request.Header.Get("Origin") != "" {
 		http.Error(response, "browser requests are not allowed", http.StatusForbidden)
@@ -1533,7 +1462,6 @@ func handleActionAPI(response http.ResponseWriter, request *http.Request) {
 		}
 		deleteGatewayState(selected.Name)
 		err = deleteConfig(selected.Name)
-
 	default:
 		http.Error(response, "unknown action", http.StatusBadRequest)
 		return
@@ -1544,9 +1472,7 @@ func handleActionAPI(response http.ResponseWriter, request *http.Request) {
 	}
 	response.WriteHeader(http.StatusNoContent)
 }
-
 func historyPath() string { return filepath.Join(filepath.Dir(configPath), "history.json") }
-
 func loadHistory() []historyEntry {
 	data, err := os.ReadFile(historyPath())
 	if err != nil {
@@ -1558,7 +1484,6 @@ func loadHistory() []historyEntry {
 	}
 	return entries
 }
-
 func recordHistory(profile, event string) {
 	entry := historyEntry{ID: fmt.Sprintf("%d-%s", time.Now().UnixNano(), profile), Profile: profile, Event: event, Time: time.Now().Format(time.RFC3339)}
 	trafficState.RLock()
@@ -1574,7 +1499,6 @@ func recordHistory(profile, event string) {
 		_ = os.WriteFile(historyPath(), data, 0600)
 	}
 }
-
 func handleHistoryAPI(response http.ResponseWriter, request *http.Request) {
 	if request.Method == http.MethodDelete {
 		_ = os.WriteFile(historyPath(), []byte("[]\n"), 0600)
@@ -1588,7 +1512,6 @@ func handleHistoryAPI(response http.ResponseWriter, request *http.Request) {
 	response.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(response).Encode(entries)
 }
-
 func handleRouteCheckAPI(response http.ResponseWriter, request *http.Request) {
 	target := net.ParseIP(strings.TrimSpace(request.URL.Query().Get("target"))).To4()
 	if target == nil {
@@ -1620,7 +1543,6 @@ func handleRouteCheckAPI(response http.ResponseWriter, request *http.Request) {
 	response.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(response).Encode(map[string]any{"target": target.String(), "matches": matches, "conflict": len(matches) > 1 && matches[0].Prefix == matches[1].Prefix})
 }
-
 func monitorConnections() {
 	time.Sleep(3 * time.Second)
 	for {
@@ -1660,7 +1582,6 @@ func monitorConnections() {
 		time.Sleep(5 * time.Second)
 	}
 }
-
 func handleLogsAPI(response http.ResponseWriter, request *http.Request) {
 	name := request.URL.Query().Get("name")
 	configs, err := loadConfigs()
@@ -1701,7 +1622,6 @@ func handleLogsAPI(response http.ResponseWriter, request *http.Request) {
 	response.Header().Set("Content-Type", "text/plain; charset=utf-8")
 	_, _ = response.Write(output)
 }
-
 func handleRoutesAPI(response http.ResponseWriter, _ *http.Request) {
 	type routeView struct {
 		Profile string `json:"profile"`
@@ -1739,8 +1659,6 @@ func handleRoutesAPI(response http.ResponseWriter, _ *http.Request) {
 	_ = json.NewEncoder(response).Encode(entries)
 }
 
-// configMu serializes read-modify-write cycles on configs.json so concurrent
-// profile saves/deletes cannot lose updates.
 var configMu sync.Mutex
 
 func loadConfigs() ([]VPNConfig, error) {
@@ -1757,7 +1675,6 @@ func loadConfigs() ([]VPNConfig, error) {
 	}
 	return configs, nil
 }
-
 func saveConfigs(configs []VPNConfig) error {
 	if err := os.MkdirAll(filepath.Dir(configPath), 0700); err != nil {
 		return err
@@ -1766,16 +1683,12 @@ func saveConfigs(configs []VPNConfig) error {
 	if err != nil {
 		return err
 	}
-	// Write to a temp file and rename so a crash mid-write cannot corrupt
-	// the whole profile list.
 	tmp := configPath + ".tmp"
 	if err := os.WriteFile(tmp, data, 0600); err != nil {
 		return err
 	}
 	return os.Rename(tmp, configPath)
 }
-
-// upsertConfig replaces replaceName (if set) and any existing profile with config.Name.
 func upsertConfig(config VPNConfig, replaceName string) error {
 	configMu.Lock()
 	defer configMu.Unlock()
@@ -1794,7 +1707,6 @@ func upsertConfig(config VPNConfig, replaceName string) error {
 	sort.Slice(filtered, func(i, j int) bool { return filtered[i].Name < filtered[j].Name })
 	return saveConfigs(filtered)
 }
-
 func deleteConfig(name string) error {
 	configMu.Lock()
 	defer configMu.Unlock()
@@ -1810,7 +1722,6 @@ func deleteConfig(name string) error {
 	}
 	return saveConfigs(filtered)
 }
-
 func containerName(name string) string {
 	name = strings.ToLower(strings.TrimSpace(name))
 	name = safeNamePattern.ReplaceAllString(name, "-")
@@ -1820,24 +1731,20 @@ func containerName(name string) string {
 	}
 	return "vpntoris-" + name
 }
-
 func containerRunning(name string) bool {
 	out, err := dockerCommand("inspect", "-f", "{{.State.Running}}", name).Output()
 	return err == nil && strings.TrimSpace(string(out)) == "true"
 }
-
 func containerHealthy(name string) bool {
 	out, err := dockerCommand("inspect", "-f", "{{if .State.Health}}{{.State.Health.Status}}{{else}}{{.State.Status}}{{end}}", name).Output()
 	return err == nil && strings.TrimSpace(string(out)) == "healthy"
 }
-
 func profileConnected(config VPNConfig) bool {
 	if nativeFortiSupported(config) || nativeOpenVPNSupported(config) || nativeOpenConnectSupported(config) || nativeIPSecSupported(config) {
 		return nativeFortiConnected(config.Name)
 	}
 	return containerHealthy(containerName(config.Name))
 }
-
 func waitForContainerHealthy(name string, timeout time.Duration) error {
 	deadline := time.Now().Add(timeout)
 	for time.Now().Before(deadline) {
@@ -1852,11 +1759,9 @@ func waitForContainerHealthy(name string, timeout time.Duration) error {
 	}
 	return fmt.Errorf("VPN tunnel did not become ready before timeout")
 }
-
 func gatewayStatePath() string {
 	return filepath.Join(filepath.Dir(configPath), "gateway-state.json")
 }
-
 func setRouteStatus(name, status string) {
 	routeProgress.Lock()
 	defer routeProgress.Unlock()
@@ -1866,13 +1771,11 @@ func setRouteStatus(name, status string) {
 		routeProgress.items[name] = status
 	}
 }
-
 func currentRouteStatus(name string) string {
 	routeProgress.RLock()
 	defer routeProgress.RUnlock()
 	return routeProgress.items[name]
 }
-
 func loadGatewayStateLocked() {
 	if gatewayState.loaded {
 		return
@@ -1883,13 +1786,11 @@ func loadGatewayStateLocked() {
 		_ = json.Unmarshal(data, &gatewayState.items)
 	}
 }
-
 func saveGatewayStateLocked() {
 	if data, err := json.MarshalIndent(gatewayState.items, "", "  "); err == nil {
 		_ = os.WriteFile(gatewayStatePath(), data, 0600)
 	}
 }
-
 func deleteGatewayState(name string) {
 	gatewayState.Lock()
 	defer gatewayState.Unlock()
@@ -1897,7 +1798,6 @@ func deleteGatewayState(name string) {
 	delete(gatewayState.items, name)
 	saveGatewayStateLocked()
 }
-
 func gatewayCandidates(config VPNConfig) []string {
 	values := append([]string{strings.TrimSpace(config.Host)}, splitValues(config.BackupGateways)...)
 	seen := map[string]bool{}
@@ -1911,11 +1811,9 @@ func gatewayCandidates(config VPNConfig) []string {
 	}
 	return gateways
 }
-
 func validGateway(value string) bool {
 	return regexp.MustCompile(`^[A-Za-z0-9._-]+$`).MatchString(value)
 }
-
 func activeGateway(config VPNConfig) string {
 	gateways := gatewayCandidates(config)
 	if len(gateways) == 0 {
@@ -1932,7 +1830,6 @@ func activeGateway(config VPNConfig) string {
 	}
 	return gateways[0]
 }
-
 func setGatewayResult(config VPNConfig, gateway string, succeeded bool, rotate bool) string {
 	gateways := gatewayCandidates(config)
 	if len(gateways) == 0 {
@@ -1965,7 +1862,6 @@ func setGatewayResult(config VPNConfig, gateway string, succeeded bool, rotate b
 	saveGatewayStateLocked()
 	return record.Active
 }
-
 func orderedGateways(config VPNConfig) []string {
 	gateways := gatewayCandidates(config)
 	active := activeGateway(config)
@@ -1976,7 +1872,6 @@ func orderedGateways(config VPNConfig) []string {
 	}
 	return gateways
 }
-
 func connectVPNWithFailover(config VPNConfig, exhaustive bool) error {
 	if nativeFortiSupported(config) {
 		setRouteStatus(config.Name, "adding")
@@ -2059,7 +1954,6 @@ func connectVPNWithFailover(config VPNConfig, exhaustive bool) error {
 	setRouteStatus(config.Name, "failed")
 	return fmt.Errorf("all VPN gateway attempts failed: %s", strings.Join(errors, " | "))
 }
-
 func connectVPN(config VPNConfig, otp ...string) error {
 	if strings.TrimSpace(config.Name) == "" || strings.TrimSpace(config.Type) == "" {
 		return fmt.Errorf("profile name and VPN type are required")
@@ -2125,7 +2019,6 @@ func connectVPN(config VPNConfig, otp ...string) error {
 	}
 	return waitForContainerHealthy(name, timeout)
 }
-
 func overrideOpenVPNRemote(configuration, gateway, port string) string {
 	lines := strings.Split(configuration, "\n")
 	result := make([]string, 0, len(lines)+1)
@@ -2152,7 +2045,6 @@ func overrideOpenVPNRemote(configuration, gateway, port string) string {
 	}
 	return strings.Join(result, "\n")
 }
-
 func sendOTP(config VPNConfig, otp string) error {
 	otp = strings.TrimSpace(otp)
 	if otp == "" || len(otp) > 32 {
@@ -2170,7 +2062,6 @@ func sendOTP(config VPNConfig, otp string) error {
 }
 
 var proposalToken = regexp.MustCompile(`^[a-zA-Z0-9_-]+$`)
-
 var dhGroupNames = map[string]string{
 	"1": "modp768", "2": "modp1024", "5": "modp1536", "14": "modp2048",
 	"15": "modp3072", "16": "modp4096", "17": "modp6144", "18": "modp8192",
@@ -2186,7 +2077,6 @@ func tokens(value string) ([]string, error) {
 	}
 	return fields, nil
 }
-
 func groups(value string) ([]string, error) {
 	values, err := tokens(value)
 	if err != nil {
@@ -2202,7 +2092,6 @@ func groups(value string) ([]string, error) {
 	}
 	return result, nil
 }
-
 func buildProposals(encryptionValue, integrityValue, prfValue, groupValue string, ike bool) (string, error) {
 	encryptions, err := tokens(encryptionValue)
 	if err != nil {
@@ -2258,7 +2147,6 @@ func buildProposals(encryptionValue, integrityValue, prfValue, groupValue string
 	}
 	return strings.Join(result, ","), nil
 }
-
 func renderSwanctlConfig(config VPNConfig) (string, error) {
 	ip := config.IPSec
 	if ip.IKEVersion != 1 && ip.IKEVersion != 2 {
@@ -2402,7 +2290,6 @@ secrets {
 		fragmentation, ip.MOBIKE, ip.ForceEncap, aggressive, vips, authSections,
 		localTS, remoteTS, espProposals, ip.ChildLifetime, rekeyBytes, ip.ReplayWindow, dpdAction, secretSections), nil
 }
-
 func disconnectVPN(name string) error {
 	output, err := dockerCommand("rm", "-f", name).CombinedOutput()
 	if err != nil {

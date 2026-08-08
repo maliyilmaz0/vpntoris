@@ -8,19 +8,15 @@ import (
 	"strings"
 )
 
-// NewDNS returns the Windows split-DNS backend (NRPT via powershell).
 func NewDNS() DNSConfigurator {
 	return NewWindowsDNS(func(name string, args ...string) ([]byte, error) {
 		return exec.Command(name, args...).CombinedOutput()
 	})
 }
-
-// NewWindowsDNS builds a PowerShell NRPT configurator with an injectable runner.
 func NewWindowsDNS(run Runner) DNSConfigurator {
 	return CommandDNS{
 		Run: run,
 		Add: func(interfaceName, domain string, servers []string) (string, []string) {
-			// Namespace is profile-scoped by domain name; interface is recorded in comment only.
 			_ = interfaceName
 			script := fmt.Sprintf(
 				`Add-DnsClientNrptRule -Namespace ".%s" -NameServers %s -Comment "vpntoris"`,
@@ -39,7 +35,6 @@ func NewWindowsDNS(run Runner) DNSConfigurator {
 		},
 	}
 }
-
 func powershellStringList(values []string) string {
 	quoted := make([]string, 0, len(values))
 	for _, value := range values {

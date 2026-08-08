@@ -79,7 +79,6 @@ func main() {
 		}
 	}
 }
-
 func install(uid int) error {
 	exe, err := os.Executable()
 	if err != nil {
@@ -108,7 +107,6 @@ func install(uid int) error {
 	}
 	return nil
 }
-
 func copyExecutable(source, destination string) error {
 	data, err := os.ReadFile(source)
 	if err != nil {
@@ -116,7 +114,6 @@ func copyExecutable(source, destination string) error {
 	}
 	return writeAtomic(destination, data, 0755)
 }
-
 func writeAtomic(destination string, data []byte, mode os.FileMode) error {
 	if err := os.MkdirAll(filepath.Dir(destination), 0755); err != nil {
 		return err
@@ -144,7 +141,6 @@ func writeAtomic(destination string, data []byte, mode os.FileMode) error {
 	}
 	return os.Rename(temporaryPath, destination)
 }
-
 func serve(uid int) error {
 	if err := os.MkdirAll(stateDir, 0711); err != nil {
 		return err
@@ -191,7 +187,6 @@ func serve(uid int) error {
 		}()
 	}
 }
-
 func validate(req *request) error {
 	if req.Key == "" || len(req.Key) > 80 {
 		return fmt.Errorf("invalid profile key")
@@ -226,7 +221,6 @@ func validate(req *request) error {
 	}
 	return nil
 }
-
 func start(req request) error {
 	if req.Port == 0 || len(req.Routes) == 0 {
 		return fmt.Errorf("SOCKS port and routes are required")
@@ -309,7 +303,6 @@ func start(req request) error {
 	}
 	return nil
 }
-
 func stop(req request) {
 	device := deviceName(req.Key)
 	devicePath := filepath.Join(stateDir, req.Key+".device")
@@ -340,7 +333,6 @@ func stop(req request) {
 	}
 	_ = os.Remove(domainsPath)
 }
-
 func validDomain(domain string) bool {
 	if domain == "" || len(domain) > 253 || strings.HasPrefix(domain, ".") || strings.HasSuffix(domain, ".") {
 		return false
@@ -352,15 +344,12 @@ func validDomain(domain string) bool {
 	}
 	return true
 }
-
 func deviceName(key string) string {
 	h := fnv.New32a()
 	_, _ = h.Write([]byte(key))
 	return fmt.Sprintf("utun%d", 200+h.Sum32()%40)
 }
-
 func tun2SocksArguments(device string, port int) []string {
 	return []string{"--device", device, "--proxy", fmt.Sprintf("socks5://127.0.0.1:%d", port)}
 }
-
 func fatal(message string) { fmt.Fprintln(os.Stderr, message); os.Exit(1) }

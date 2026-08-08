@@ -19,7 +19,6 @@ type EngineStart struct {
 	Input        io.Reader
 	LogPath      string
 }
-
 type EngineProcess struct {
 	Manifest EngineManifest
 	PID      int
@@ -29,7 +28,6 @@ type EngineProcess struct {
 	done     chan error
 	stopOnce sync.Once
 }
-
 type Supervisor struct {
 	root string
 }
@@ -44,7 +42,6 @@ func NewSupervisor(root string) (*Supervisor, error) {
 	}
 	return &Supervisor{root: path}, nil
 }
-
 func (supervisor *Supervisor) Start(ctx context.Context, start EngineStart) (*EngineProcess, error) {
 	manifest, executable, err := LoadEngineManifest(supervisor.root, start.ManifestPath)
 	if err != nil {
@@ -78,11 +75,9 @@ func (supervisor *Supervisor) Start(ctx context.Context, start EngineStart) (*En
 	}()
 	return process, nil
 }
-
 func (process *EngineProcess) Wait() error {
 	return <-process.done
 }
-
 func (process *EngineProcess) Stop(timeout time.Duration) error {
 	var stopError error
 	process.stopOnce.Do(func() {
@@ -101,7 +96,6 @@ func (process *EngineProcess) Stop(timeout time.Duration) error {
 	})
 	return stopError
 }
-
 func controlledEnvironment(values map[string]string) []string {
 	allowed := []string{"LANG", "LC_ALL", "SSL_CERT_FILE", "SSL_CERT_DIR", "SYSTEMROOT", "WINDIR"}
 	environment := []string{}

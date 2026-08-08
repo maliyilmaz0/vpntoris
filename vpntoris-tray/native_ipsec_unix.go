@@ -4,19 +4,16 @@ package main
 
 import (
 	"fmt"
-
 	"vpntoris-tray/internal/fortihelper"
 )
 
 func nativeIPSecSupported(config VPNConfig) bool {
 	return config.Type == "ipsec" && config.IPSec != nil && nativeHelperReady()
 }
-
 func nativeIPSecNeedsOTP(name string) bool {
 	status, err := nativeFortiStatus(name)
 	return err == nil && status.State == "waiting-otp"
 }
-
 func nativeIPSecConnect(config VPNConfig) error {
 	settings := config.IPSec
 	ikePRF := settings.IKEPRF
@@ -81,7 +78,6 @@ func nativeIPSecConnect(config VPNConfig) error {
 	}
 	return nil
 }
-
 func joinNonEmpty(values []string) string {
 	result := ""
 	for _, value := range values {

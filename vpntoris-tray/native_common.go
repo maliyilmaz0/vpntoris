@@ -10,15 +10,9 @@ func nativeProfileID(name string) string {
 	digest := sha256.Sum256([]byte(name))
 	return "profile-" + hex.EncodeToString(digest[:8])
 }
-
-// nativeSplitDNS returns profile domains and DNS servers for the privileged helper.
-// Both must be non-empty for scoped split DNS to be installed.
 func nativeSplitDNS(config VPNConfig) (domains, servers []string) {
 	return splitValues(config.Domains), splitValues(config.DNSServers)
 }
-
-// withDNSServerRoutes ensures each VPN DNS server is also a destination route
-// so resolver queries reach the server over the tunnel (host /32).
 func withDNSServerRoutes(routes, servers []string) []string {
 	if len(servers) == 0 {
 		return routes

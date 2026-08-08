@@ -1,15 +1,7 @@
 #!/bin/bash
 set -euo pipefail
 
-# Packages a Linux OpenVPN engine under:
-#   .build/native-engines/linux-${GOARCH}/openvpn/{bin,lib,manifest.json,licenses}
-#
-# Build happens inside Docker so macOS hosts can produce linux-amd64/arm64
-# payloads without a local cross toolchain. Engines are never resolved from PATH
-# at runtime; only the packaged binary + libs are used.
-
 ROOT_DIR=$(cd "$(dirname "$0")/../.." && pwd)
-# Align with the macOS packaged series where practical.
 OPENVPN_VERSION=${OPENVPN_VERSION:-2.7.5}
 OPENVPN_SHA256=${OPENVPN_SHA256:-c6864b3c7d4e059c7d6ce22d1b5fa646c8b379a06af872eeb9792b6083a44ac4}
 GOARCH=${GOARCH:-amd64}
@@ -60,7 +52,6 @@ make install
 mkdir -p /out/bin /out/lib /out/licenses /out/sources
 cp /opt/openvpn/sbin/openvpn /out/bin/openvpn
 chmod 755 /out/bin/openvpn
-# Copy direct shared libraries used by the engine so runtime never needs PATH/ldconfig.
 ldd /out/bin/openvpn | awk "/=> \\// {print \$3}" | while read -r lib; do
   base=$(basename "$lib")
   case "$base" in
@@ -70,7 +61,6 @@ ldd /out/bin/openvpn | awk "/=> \\// {print \$3}" | while read -r lib; do
   esac
   cp -L "$lib" "/out/lib/$base"
 done
-# Relocate loader search to the bundled lib directory (no host PATH/ldconfig).
 if [[ -n "$(ls -A /out/lib 2>/dev/null || true)" ]]; then
   patchelf --set-rpath "\$ORIGIN/../lib" /out/bin/openvpn
   for lib in /out/lib/*; do
@@ -106,8 +96,6 @@ print("manifest written")
 PY
 '
 
-# Fix loader path: write a tiny wrapper is avoided; use patchelf when available in image next iteration.
-# Validate layout on host.
 test -x "$OUTPUT_ROOT/bin/openvpn"
 test -f "$OUTPUT_ROOT/manifest.json"
 python3 - <<PY

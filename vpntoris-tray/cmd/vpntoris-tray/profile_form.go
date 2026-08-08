@@ -7,12 +7,9 @@ import (
 	"os/exec"
 	"runtime"
 	"strings"
-
 	"vpntoris-tray/internal/trayclient"
 )
 
-// editProfileForm opens a native form (GTK on Linux, sequential prompts elsewhere)
-// and returns the edited profile. replaceName is the existing name when editing.
 func editProfileForm(existing *trayclient.ProfileConfig) (trayclient.ProfileConfig, string, error) {
 	var (
 		config  trayclient.ProfileConfig
@@ -31,7 +28,6 @@ func editProfileForm(existing *trayclient.ProfileConfig) (trayclient.ProfileConf
 		if existing != nil {
 			base = *existing
 			replace = existing.Name
-			// Password/PSK are never returned by the API; leave blank = keep stored.
 			base.Password = ""
 			if base.IPSec != nil {
 				base.IPSec.PreSharedKey = ""
@@ -47,7 +43,6 @@ func editProfileForm(existing *trayclient.ProfileConfig) (trayclient.ProfileConf
 	})
 	return config, replace, err
 }
-
 func wizardProfileForm(base trayclient.ProfileConfig, replace string) (trayclient.ProfileConfig, string, error) {
 	name, err := promptEntry("VPNToris", "Profile name", base.Name)
 	if err != nil || strings.TrimSpace(name) == "" {
@@ -79,8 +74,6 @@ func wizardProfileForm(base trayclient.ProfileConfig, replace string) (trayclien
 	if err != nil {
 		return trayclient.ProfileConfig{}, "", fmt.Errorf("cancelled")
 	}
-	// Optional fields: cancelling keeps the existing value instead of
-	// aborting the whole wizard.
 	domains, err := promptEntry("VPNToris", "Split DNS domains (e.g. corp.local)", base.Domains)
 	if err != nil {
 		domains = base.Domains
@@ -99,32 +92,30 @@ func wizardProfileForm(base trayclient.ProfileConfig, replace string) (trayclien
 	} else {
 		autoReconnect = true
 	}
-
 	config := trayclient.ProfileConfig{
-		Name:            strings.TrimSpace(name),
-		Description:     base.Description,
-		Type:            vpnType,
-		Host:            strings.TrimSpace(host),
-		Port:            strings.TrimSpace(port),
-		User:            strings.TrimSpace(user),
-		Password:        password,
-		TwoFactor:       twoFactor,
-		AutoReconnect:   autoReconnect,
-		ConnectOnLaunch: base.ConnectOnLaunch,
-		Routes:          strings.TrimSpace(routes),
-		Domains:         strings.TrimSpace(domains),
-		DNSServers:      strings.TrimSpace(dnsServers),
-		BackupGateways:  base.BackupGateways,
-		FailoverLimit:   base.FailoverLimit,
-		Config:          base.Config,
+		Name:                strings.TrimSpace(name),
+		Description:         base.Description,
+		Type:                vpnType,
+		Host:                strings.TrimSpace(host),
+		Port:                strings.TrimSpace(port),
+		User:                strings.TrimSpace(user),
+		Password:            password,
+		TwoFactor:           twoFactor,
+		AutoReconnect:       autoReconnect,
+		ConnectOnLaunch:     base.ConnectOnLaunch,
+		Routes:              strings.TrimSpace(routes),
+		Domains:             strings.TrimSpace(domains),
+		DNSServers:          strings.TrimSpace(dnsServers),
+		BackupGateways:      base.BackupGateways,
+		FailoverLimit:       base.FailoverLimit,
+		Config:              base.Config,
 		OpenConnectProtocol: firstNonEmpty(base.OpenConnectProtocol, "anyconnect"),
-		ExternalBrowser: base.ExternalBrowser,
-		IPSec:           base.IPSec,
+		ExternalBrowser:     base.ExternalBrowser,
+		IPSec:               base.IPSec,
 	}
 	if config.FailoverLimit <= 0 {
 		config.FailoverLimit = 2
 	}
-
 	switch config.Type {
 	case "openconnect":
 		proto, err := promptList("VPNToris", "OpenConnect gateway protocol", []string{
@@ -156,14 +147,11 @@ func wizardProfileForm(base trayclient.ProfileConfig, replace string) (trayclien
 	}
 	return config, replace, nil
 }
-
 func gtkProfileForm(base trayclient.ProfileConfig) (trayclient.ProfileConfig, error) {
 	payload, err := json.Marshal(base)
 	if err != nil {
 		return trayclient.ProfileConfig{}, err
 	}
-	// Type-specific widgets are shown only when the matching VPN type is selected
-	// (same idea as the macOS ProfileEditor).
 	script := `#!/usr/bin/env python3
 import json, sys
 import gi
@@ -585,11 +573,9 @@ print(json.dumps(out))
 	}
 	tmp.Close()
 	_ = os.Chmod(path, 0700)
-
 	cmd := exec.Command("python3", path)
 	cmd.Stdin = strings.NewReader(string(payload))
 	cmd.Env = os.Environ()
-	// Prefer the graphical session environment when tray was started from autostart.
 	if os.Getenv("DISPLAY") == "" && os.Getenv("WAYLAND_DISPLAY") == "" {
 		cmd.Env = append(cmd.Env, "DISPLAY=:0")
 	}
@@ -604,13 +590,11 @@ print(json.dumps(out))
 	if config.Type == "ipsec" && config.IPSec == nil {
 		config.IPSec = trayclient.DefaultIPSec()
 	}
-	// If OpenVPN path was not used but base already had config text, keep it (handled in Python).
 	if config.Type == "openvpn" && strings.TrimSpace(config.Config) == "" && strings.TrimSpace(base.Config) != "" {
 		config.Config = base.Config
 	}
 	return config, nil
 }
-
 func firstNonEmpty(values ...string) string {
 	for _, value := range values {
 		if strings.TrimSpace(value) != "" {

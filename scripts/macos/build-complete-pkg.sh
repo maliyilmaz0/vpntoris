@@ -1,10 +1,4 @@
 #!/bin/zsh
-# Merge intermediate app PKG + engine PKG into the ONLY shippable macOS product:
-#   VPNToris-<ver>-universal-complete.pkg
-#
-# App-only universal.pkg is never a release artifact — it is only an input here.
-# Set VPNTORIS_MACOS_UNSIGNED=1 (or pass --unsigned) for local/dev builds without
-# Developer ID Installer signing / notarization.
 set -euo pipefail
 
 repo_root=$(cd "$(dirname "$0")/../.." && pwd)
@@ -21,7 +15,6 @@ for arg in "$@"; do
   esac
 done
 
-# Strip optional flag from positional args
 positional=()
 for arg in "$@"; do
   case "$arg" in

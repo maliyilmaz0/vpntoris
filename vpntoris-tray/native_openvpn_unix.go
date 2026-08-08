@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"strings"
 	"time"
-
 	"vpntoris-tray/internal/fortihelper"
 	"vpntoris-tray/internal/openvpnconfig"
 )
@@ -14,12 +13,10 @@ import (
 func nativeOpenVPNSupported(config VPNConfig) bool {
 	return config.Type == "openvpn" && nativeHelperReady()
 }
-
 func nativeOpenVPNNeedsOTP(name string) bool {
 	status, err := nativeFortiStatus(name)
 	return err == nil && status.State == "waiting-otp"
 }
-
 func nativeOpenVPNTraffic(name string) (uint64, uint64, int64, error) {
 	status, err := nativeFortiStatus(name)
 	if err != nil {
@@ -30,7 +27,6 @@ func nativeOpenVPNTraffic(name string) (uint64, uint64, int64, error) {
 	}
 	return status.Received, status.Sent, status.Duration, nil
 }
-
 func nativeOpenVPNConnect(config VPNConfig) error {
 	configuration := config.Config
 	if strings.TrimSpace(config.Host) != "" {

@@ -1,9 +1,6 @@
 #!/bin/bash
 set -euo pipefail
 
-# Multi-protocol Linux native smoke (OpenVPN + OpenConnect + Forti fake engines).
-# Usage: ./scripts/linux/smoke-native-protocols.sh
-
 ROOT_DIR=$(cd "$(dirname "$0")/../.." && pwd)
 GOARCH=${GOARCH:-amd64}
 IMAGE=${IMAGE:-golang:1.26-bookworm}

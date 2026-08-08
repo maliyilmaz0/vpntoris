@@ -7,20 +7,15 @@ import (
 	"strings"
 )
 
-// NewDNS returns the Linux split-DNS backend (systemd-resolved via resolvectl).
 func NewDNS() DNSConfigurator {
 	return NewLinuxDNS(func(name string, args ...string) ([]byte, error) {
 		return exec.Command(name, args...).CombinedOutput()
 	})
 }
-
-// NewLinuxDNS builds a resolvectl-backed configurator with an injectable runner.
 func NewLinuxDNS(run Runner) DNSConfigurator {
 	return CommandDNS{
 		Run: run,
 		Add: func(interfaceName, domain string, servers []string) (string, []string) {
-			// First set interface DNS servers, then scope the domain with a routing-only suffix.
-			// Callers that need both steps use ApplyLinuxSplitDNS.
 			args := append([]string{"dns", interfaceName}, servers...)
 			return "resolvectl", args
 		},
@@ -29,8 +24,6 @@ func NewLinuxDNS(run Runner) DNSConfigurator {
 		},
 	}
 }
-
-// ApplyLinuxSplitDNS installs DNS servers and a ~domain routing domain on an interface.
 func ApplyLinuxSplitDNS(run Runner, interfaceName, domain string, servers []string) error {
 	dns := NewLinuxDNS(run).(CommandDNS)
 	if err := dns.AddScoped(interfaceName, domain, servers); err != nil {

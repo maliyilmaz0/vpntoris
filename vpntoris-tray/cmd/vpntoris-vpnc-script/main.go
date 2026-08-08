@@ -32,7 +32,6 @@ func main() {
 	}
 	fmt.Printf("VPNTORIS_INTERFACE=%s\n", interfaceName)
 }
-
 func fatal(message string) {
 	fmt.Fprintln(os.Stderr, message)
 	os.Exit(1)

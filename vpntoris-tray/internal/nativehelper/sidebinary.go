@@ -7,8 +7,6 @@ import (
 	"runtime"
 )
 
-// engineSideBinary resolves a helper shipped next to an engine executable.
-// On Windows, prefer a .exe suffix and do not require Unix execute bits.
 func engineSideBinary(dir, name string) (string, error) {
 	candidates := []string{filepath.Join(dir, name)}
 	if runtime.GOOS == "windows" {

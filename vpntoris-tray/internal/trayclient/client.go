@@ -11,13 +11,10 @@ import (
 	"time"
 )
 
-// Client talks to the local VPNToris controller HTTP API.
 type Client struct {
 	BaseURL    string
 	HTTPClient *http.Client
 }
-
-// Profile is the controller profile list projection used by the tray.
 type Profile struct {
 	Name          string `json:"name"`
 	Description   string `json:"description"`
@@ -32,8 +29,6 @@ type Profile struct {
 	NeedsOTP      bool   `json:"needsOtp"`
 	RouteStatus   string `json:"routeStatus"`
 }
-
-// IPSecConfig mirrors the controller IPsec settings used when saving profiles.
 type IPSecConfig struct {
 	IKEVersion      int    `json:"ikeVersion"`
 	IKEMode         string `json:"ikeMode"`
@@ -64,8 +59,6 @@ type IPSecConfig struct {
 	LocalSelectors  string `json:"localSelectors"`
 	RemoteSelectors string `json:"remoteSelectors"`
 }
-
-// ProfileConfig is the editable profile payload (same shape as controller VPNConfig).
 type ProfileConfig struct {
 	Name                string       `json:"name"`
 	Description         string       `json:"description"`
@@ -88,7 +81,6 @@ type ProfileConfig struct {
 	IPSec               *IPSecConfig `json:"ipsec,omitempty"`
 }
 
-// DefaultIPSec returns sensible FortiGate-style IPsec defaults.
 func DefaultIPSec() *IPSecConfig {
 	return &IPSecConfig{
 		IKEVersion:    2,
@@ -112,8 +104,6 @@ func DefaultIPSec() *IPSecConfig {
 		ReplayWindow:  32,
 	}
 }
-
-// New returns a client for the default localhost controller.
 func New() *Client {
 	return &Client{
 		BaseURL: "http://127.0.0.1:17984",
@@ -122,8 +112,6 @@ func New() *Client {
 		},
 	}
 }
-
-// Profiles lists configured VPN profiles.
 func (client *Client) Profiles() ([]Profile, error) {
 	var profiles []Profile
 	if err := client.getJSON("/api/profiles", &profiles); err != nil {
@@ -131,8 +119,6 @@ func (client *Client) Profiles() ([]Profile, error) {
 	}
 	return profiles, nil
 }
-
-// ProfileConfig loads one full profile (secrets stripped by the controller).
 func (client *Client) ProfileConfig(name string) (ProfileConfig, error) {
 	var config ProfileConfig
 	if err := client.getJSON("/api/profiles?name="+url.QueryEscape(name), &config); err != nil {
@@ -140,8 +126,6 @@ func (client *Client) ProfileConfig(name string) (ProfileConfig, error) {
 	}
 	return config, nil
 }
-
-// SaveProfile creates or updates a profile. replace is the previous name when renaming.
 func (client *Client) SaveProfile(config ProfileConfig, replace string) error {
 	path := "/api/profiles"
 	if replace != "" && replace != config.Name {
@@ -171,8 +155,6 @@ func (client *Client) SaveProfile(config ProfileConfig, replace string) error {
 	}
 	return nil
 }
-
-// DeleteProfile disconnects and removes a profile from disk.
 func (client *Client) DeleteProfile(name string) error {
 	request, err := http.NewRequest(http.MethodDelete, client.BaseURL+"/api/profiles?name="+url.QueryEscape(name), nil)
 	if err != nil {
@@ -193,28 +175,20 @@ func (client *Client) DeleteProfile(name string) error {
 	}
 	return nil
 }
-
-// Connect starts a VPN session. Password and PSK are sent as headers only.
 func (client *Client) Connect(name, password, psk string) error {
 	return client.postAction("connect", name, map[string]string{
 		"X-VPNToris-Password": password,
 		"X-VPNToris-PSK":      psk,
 	})
 }
-
-// Disconnect stops a VPN session.
 func (client *Client) Disconnect(name string) error {
 	return client.postAction("disconnect", name, nil)
 }
-
-// SubmitOTP delivers a challenge response for an in-flight session.
 func (client *Client) SubmitOTP(name, otp string) error {
 	return client.postAction("otp", name, map[string]string{
 		"X-VPNToris-OTP": otp,
 	})
 }
-
-// ResetAll closes every connection and clears helper state without deleting profiles.
 func (client *Client) ResetAll() error {
 	request, err := http.NewRequest(http.MethodPost, client.BaseURL+"/api/reset", nil)
 	if err != nil {
@@ -231,8 +205,6 @@ func (client *Client) ResetAll() error {
 	}
 	return nil
 }
-
-// Logs returns the recent log text for a profile.
 func (client *Client) Logs(name string) (string, error) {
 	response, err := client.HTTPClient.Get(client.BaseURL + "/api/logs?name=" + url.QueryEscape(name))
 	if err != nil {
@@ -248,7 +220,6 @@ func (client *Client) Logs(name string) (string, error) {
 	}
 	return string(body), nil
 }
-
 func (client *Client) postAction(action, name string, headers map[string]string) error {
 	endpoint := client.BaseURL + "/api/action?action=" + url.QueryEscape(action) + "&name=" + url.QueryEscape(name)
 	request, err := http.NewRequest(http.MethodPost, endpoint, nil)
@@ -275,7 +246,6 @@ func (client *Client) postAction(action, name string, headers map[string]string)
 	}
 	return nil
 }
-
 func (client *Client) getJSON(path string, target any) error {
 	response, err := client.HTTPClient.Get(client.BaseURL + path)
 	if err != nil {

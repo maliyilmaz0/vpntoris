@@ -1,4 +1,6 @@
 #!/bin/bash
+# App component postinstall. Must not fail the whole product install when the
+# legacy Docker route-helper cannot run (unsigned/dev packages → Gatekeeper Killed: 9).
 set -e
 
 APP=/Applications/VPNToris.app
@@ -10,7 +12,16 @@ if [ "$CONSOLE_USER" = "root" ] || [ "$CONSOLE_USER" = "loginwindow" ] || [ -z "
 fi
 
 CONSOLE_UID=$(/usr/bin/id -u "$CONSOLE_USER")
-"$APP/Contents/MacOS/vpntoris-route-helper" install "$CONSOLE_UID"
+
+# Local/dev packages are unsigned; clear quarantine so helpers can execute.
+/usr/bin/xattr -dr com.apple.quarantine "$APP" 2>/dev/null || true
+
+# Legacy Docker path helper. Native engine does not require this; do not abort install.
+if [ -x "$APP/Contents/MacOS/vpntoris-route-helper" ]; then
+    if ! "$APP/Contents/MacOS/vpntoris-route-helper" install "$CONSOLE_UID"; then
+        echo "warning: vpntoris-route-helper install failed (unsigned/dev binary or Gatekeeper). Native helper path is unaffected." >&2
+    fi
+fi
 
 /bin/mkdir -p /usr/local/bin /opt/homebrew/bin
 /bin/ln -sfn "$APP/Contents/MacOS/vpntorisctl" /usr/local/bin/vpntorisctl

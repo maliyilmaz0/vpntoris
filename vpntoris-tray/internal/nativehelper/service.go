@@ -103,7 +103,10 @@ func New(config Config) (*Service, error) {
 		if journalErr != nil {
 			return nil, journalErr
 		}
-		backend := netbackend.MutationBackend{Router: config.Router}
+		// DNS must be wired: profile Domains+DNSServers produce MutationDNS after
+		// the tunnel is up. A nil DNS backend fails applyNetwork and kills openfortivpn
+		// (SIGHUP / "Cancelling threads") immediately after "Interface pppN is UP".
+		backend := netbackend.MutationBackend{Router: config.Router, DNS: netbackend.NewDNS()}
 		manager, journalErr = nativeengine.NewManager(journal, backend)
 		if journalErr != nil {
 			return nil, journalErr
@@ -476,10 +479,12 @@ func (service *Service) applyNetwork(current *session, interfaceName string) err
 		processID = current.command.Process.Pid
 	}
 	plan, err := nativeengine.BuildNetworkPlan(nativeengine.ProfileNetwork{
-		Profile:   current.request.Profile,
-		Interface: interfaceName,
-		ProcessID: processID,
-		Routes:    current.request.Routes,
+		Profile:    current.request.Profile,
+		Interface:  interfaceName,
+		ProcessID:  processID,
+		Routes:     current.request.Routes,
+		Domains:    current.request.Domains,
+		DNSServers: current.request.DNSServers,
 	})
 	if err != nil {
 		return err
@@ -566,7 +571,9 @@ func (service *Service) monitor(current *session) {
 				continue
 			}
 			if err := service.applyNetwork(current, interfaceName); err != nil {
-				service.fail(current, err.Error())
+				// Keep the tunnel up only if routes/DNS can be applied; otherwise
+				// tear down so the UI does not report "connected" without ownership.
+				service.fail(current, "network setup failed: "+err.Error())
 				go service.finish(current, <-wait)
 				return
 			}

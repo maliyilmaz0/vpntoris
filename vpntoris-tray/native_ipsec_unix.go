@@ -55,6 +55,8 @@ func nativeIPSecConnect(config VPNConfig) error {
 	for _, route := range routes {
 		values = append(values, fmt.Sprintf("%s/%d", route.network, route.prefix))
 	}
+	domains, dnsServers := nativeSplitDNS(config)
+	values = withDNSServerRoutes(values, dnsServers)
 	authMode := settings.AuthMode
 	if settings.IKEVersion == 1 && authMode == "eap" {
 		authMode = "xauth"
@@ -67,7 +69,7 @@ func nativeIPSecConnect(config VPNConfig) error {
 	if dpdAction == "" {
 		dpdAction = "restart"
 	}
-	request := fortihelper.Request{Action: fortihelper.ActionStart, Profile: nativeProfileID(config.Name), Protocol: fortihelper.ProtocolIPSec, Host: config.Host, Username: config.User, Password: config.Password, TwoFactor: config.TwoFactor, Routes: values, IPSec: &fortihelper.IPSecRequest{Version: settings.IKEVersion, AuthMode: authMode, PreSharedKey: settings.PreSharedKey, LocalID: settings.LocalID, RemoteID: settings.RemoteID, ModeConfig: settings.ModeConfig, Aggressive: settings.IKEMode == "aggressive", MOBIKE: settings.MOBIKE, ForceEncap: settings.ForceEncap, Fragmentation: fragmentation, DPDAction: dpdAction, DPDDelay: max(settings.DPDDelay, 30), DPDTimeout: max(settings.DPDTimeout, 150), IKELifetime: max(settings.IKELifetime, 28800), ChildLifetime: max(settings.ChildLifetime, 3600), ReplayWindow: max(settings.ReplayWindow, 32), IKEProposals: ikeProposals, ESPProposals: joinNonEmpty(espItems)}}
+	request := fortihelper.Request{Action: fortihelper.ActionStart, Profile: nativeProfileID(config.Name), Protocol: fortihelper.ProtocolIPSec, Host: config.Host, Username: config.User, Password: config.Password, TwoFactor: config.TwoFactor, Routes: values, Domains: domains, DNSServers: dnsServers, IPSec: &fortihelper.IPSecRequest{Version: settings.IKEVersion, AuthMode: authMode, PreSharedKey: settings.PreSharedKey, LocalID: settings.LocalID, RemoteID: settings.RemoteID, ModeConfig: settings.ModeConfig, Aggressive: settings.IKEMode == "aggressive", MOBIKE: settings.MOBIKE, ForceEncap: settings.ForceEncap, Fragmentation: fragmentation, DPDAction: dpdAction, DPDDelay: max(settings.DPDDelay, 30), DPDTimeout: max(settings.DPDTimeout, 150), IKELifetime: max(settings.IKELifetime, 28800), ChildLifetime: max(settings.ChildLifetime, 3600), ReplayWindow: max(settings.ReplayWindow, 32), IKEProposals: ikeProposals, ESPProposals: joinNonEmpty(espItems)}}
 	response, err := nativeFortiRequest(request)
 	request.Password = ""
 	request.IPSec.PreSharedKey = ""

@@ -41,7 +41,11 @@ type Request struct {
 	ExternalBrowser bool          `json:"externalBrowser,omitempty"`
 	TrustedCert     string        `json:"trustedCert,omitempty"`
 	Routes          []string      `json:"routes,omitempty"`
-	IPSec           *IPSecRequest `json:"ipsec,omitempty"`
+	// Domains + DNSServers install scoped split DNS after the tunnel is up.
+	// Both must be set together (never global DNS replacement).
+	Domains    []string      `json:"domains,omitempty"`
+	DNSServers []string      `json:"dnsServers,omitempty"`
+	IPSec      *IPSecRequest `json:"ipsec,omitempty"`
 }
 
 type IPSecRequest struct {
@@ -256,6 +260,31 @@ func (request Request) validateRoutes() error {
 			return fmt.Errorf("invalid or duplicate IPv4 route: %s", value)
 		}
 		seen[value] = true
+	}
+	return request.validateSplitDNS()
+}
+
+func (request Request) validateSplitDNS() error {
+	if len(request.Domains) == 0 && len(request.DNSServers) == 0 {
+		return nil
+	}
+	if len(request.Domains) == 0 || len(request.DNSServers) == 0 {
+		return fmt.Errorf("split DNS requires both domains and DNS servers")
+	}
+	if len(request.Domains) > 32 || len(request.DNSServers) > 8 {
+		return fmt.Errorf("too many split DNS domains or servers")
+	}
+	for _, domain := range request.Domains {
+		domain = strings.ToLower(strings.TrimSpace(domain))
+		if domain == "" || len(domain) > 253 || strings.HasPrefix(domain, ".") || strings.HasSuffix(domain, ".") || strings.Contains(domain, "/") {
+			return fmt.Errorf("invalid split DNS domain: %s", domain)
+		}
+	}
+	for _, server := range request.DNSServers {
+		ip := net.ParseIP(strings.TrimSpace(server))
+		if ip == nil || ip.To4() == nil {
+			return fmt.Errorf("invalid IPv4 DNS server: %s", server)
+		}
 	}
 	return nil
 }

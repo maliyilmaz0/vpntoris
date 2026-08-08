@@ -40,11 +40,13 @@ func nativeFortiConnect(config VPNConfig) error {
 	for _, route := range routes {
 		values = append(values, fmt.Sprintf("%s/%d", route.network, route.prefix))
 	}
+	domains, dnsServers := nativeSplitDNS(config)
+	values = withDNSServerRoutes(values, dnsServers)
 	certificate, err := nativeGatewayCertificate(config.Host, port)
 	if err != nil {
 		return err
 	}
-	request := fortihelper.Request{Action: fortihelper.ActionStart, Profile: nativeProfileID(config.Name), Host: config.Host, Port: port, Username: config.User, Password: config.Password, TrustedCert: certificate, Routes: values}
+	request := fortihelper.Request{Action: fortihelper.ActionStart, Profile: nativeProfileID(config.Name), Host: config.Host, Port: port, Username: config.User, Password: config.Password, TrustedCert: certificate, Routes: values, Domains: domains, DNSServers: dnsServers}
 	response, err := nativeFortiRequest(request)
 	request.Password = ""
 	if err != nil {

@@ -48,7 +48,9 @@ func nativeOpenVPNConnect(config VPNConfig) error {
 	for _, route := range routes {
 		values = append(values, fmt.Sprintf("%s/%d", route.network, route.prefix))
 	}
-	request := fortihelper.Request{Action: fortihelper.ActionStart, Profile: nativeProfileID(config.Name), Protocol: fortihelper.ProtocolOpenVPN, Configuration: configuration, Username: config.User, Password: config.Password, TwoFactor: config.TwoFactor, Routes: values}
+	domains, dnsServers := nativeSplitDNS(config)
+	values = withDNSServerRoutes(values, dnsServers)
+	request := fortihelper.Request{Action: fortihelper.ActionStart, Profile: nativeProfileID(config.Name), Protocol: fortihelper.ProtocolOpenVPN, Configuration: configuration, Username: config.User, Password: config.Password, TwoFactor: config.TwoFactor, Routes: values, Domains: domains, DNSServers: dnsServers}
 	response, err := nativeFortiRequest(request)
 	request.Password = ""
 	request.Configuration = ""

@@ -9,8 +9,19 @@ if [[ -f "$repo_root/.env" ]]; then
   source "$repo_root/.env"
   set +a
 fi
-: "${VPNTORIS_MACOS_APPLICATION_IDENTITY:?Set VPNTORIS_MACOS_APPLICATION_IDENTITY in .env}"
-: "${VPNTORIS_MACOS_INSTALLER_IDENTITY:?Set VPNTORIS_MACOS_INSTALLER_IDENTITY in .env}"
+UNSIGNED=${VPNTORIS_MACOS_UNSIGNED:-0}
+if [[ "$UNSIGNED" != "1" && "$UNSIGNED" != "true" ]]; then
+  : "${VPNTORIS_MACOS_APPLICATION_IDENTITY:?Set VPNTORIS_MACOS_APPLICATION_IDENTITY in .env}"
+  : "${VPNTORIS_MACOS_INSTALLER_IDENTITY:?Set VPNTORIS_MACOS_INSTALLER_IDENTITY in .env}"
+fi
+# Developer ID for release; ad-hoc "-" for local/dev (VPNTORIS_MACOS_UNSIGNED=1).
+if [[ "$UNSIGNED" == "1" || "$UNSIGNED" == "true" ]]; then
+  CODESIGN_IDENTITY="-"
+  CODESIGN_OPTS=(--force --sign "$CODESIGN_IDENTITY")
+else
+  CODESIGN_IDENTITY="$VPNTORIS_MACOS_APPLICATION_IDENTITY"
+  CODESIGN_OPTS=(--force --options runtime --timestamp --sign "$CODESIGN_IDENTITY")
+fi
 stage_root=$(mktemp -d /tmp/vpntoris-native-pkg-root.XXXXXX)
 scripts_root=$(mktemp -d /tmp/vpntoris-native-pkg-scripts.XXXXXX)
 output_path=${1:-"$repo_root/.build/VPNToris-Native-Engine-2.0.0-test.pkg"}
@@ -86,13 +97,13 @@ if find "$scripts_root" -type f -print0 | xargs -0 file 2>/dev/null | grep -q 'M
   find "$scripts_root" -type f -print0 | xargs -0 file 2>/dev/null | sed 's/^/  /' >&2
   exit 1
 fi
-codesign --force --options runtime --timestamp --sign "$VPNTORIS_MACOS_APPLICATION_IDENTITY" "$stage_root/Library/Application Support/VPNToris/Engines/darwin-arm64/openfortivpn/lib/libcrypto.3.dylib"
-codesign --force --options runtime --timestamp --sign "$VPNTORIS_MACOS_APPLICATION_IDENTITY" "$stage_root/Library/Application Support/VPNToris/Engines/darwin-arm64/openfortivpn/lib/libssl.3.dylib"
-codesign --force --options runtime --timestamp --sign "$VPNTORIS_MACOS_APPLICATION_IDENTITY" "$stage_root/Library/Application Support/VPNToris/Engines/darwin-arm64/openfortivpn/bin/openfortivpn"
-codesign --force --options runtime --timestamp --sign "$VPNTORIS_MACOS_APPLICATION_IDENTITY" "$stage_root/Library/PrivilegedHelperTools/com.vpntoris.native-helper"
+codesign "${CODESIGN_OPTS[@]}" "$stage_root/Library/Application Support/VPNToris/Engines/darwin-arm64/openfortivpn/lib/libcrypto.3.dylib"
+codesign "${CODESIGN_OPTS[@]}" "$stage_root/Library/Application Support/VPNToris/Engines/darwin-arm64/openfortivpn/lib/libssl.3.dylib"
+codesign "${CODESIGN_OPTS[@]}" "$stage_root/Library/Application Support/VPNToris/Engines/darwin-arm64/openfortivpn/bin/openfortivpn"
+codesign "${CODESIGN_OPTS[@]}" "$stage_root/Library/PrivilegedHelperTools/com.vpntoris.native-helper"
 packaged_openvpn="$stage_root/Library/Application Support/VPNToris/Engines/darwin-arm64/openvpn"
-for library in "$packaged_openvpn/lib/"*.dylib; do codesign --force --options runtime --timestamp --sign "$VPNTORIS_MACOS_APPLICATION_IDENTITY" "$library"; done
-codesign --force --options runtime --timestamp --sign "$VPNTORIS_MACOS_APPLICATION_IDENTITY" "$packaged_openvpn/bin/openvpn"
+for library in "$packaged_openvpn/lib/"*.dylib; do codesign "${CODESIGN_OPTS[@]}" "$library"; done
+codesign "${CODESIGN_OPTS[@]}" "$packaged_openvpn/bin/openvpn"
 openvpn_sha256=$(shasum -a 256 "$packaged_openvpn/bin/openvpn" | awk '{print $1}')
 openvpn_ssl_sha256=$(shasum -a 256 "$packaged_openvpn/lib/libssl.3.dylib" | awk '{print $1}')
 openvpn_crypto_sha256=$(shasum -a 256 "$packaged_openvpn/lib/libcrypto.3.dylib" | awk '{print $1}')
@@ -100,23 +111,23 @@ openvpn_lz4_sha256=$(shasum -a 256 "$packaged_openvpn/lib/liblz4.1.dylib" | awk 
 openvpn_lzo_sha256=$(shasum -a 256 "$packaged_openvpn/lib/liblzo2.2.dylib" | awk '{print $1}')
 jq -n --arg engine "$openvpn_sha256" --arg ssl "$openvpn_ssl_sha256" --arg crypto "$openvpn_crypto_sha256" --arg lz4 "$openvpn_lz4_sha256" --arg lzo "$openvpn_lzo_sha256" '{id:"openvpn",protocol:"openvpn",version:"2.7.5",os:"darwin",architecture:"arm64",executable:"openvpn/bin/openvpn",sha256:$engine,license:"GPL-2.0-only WITH OpenSSL-exception",capabilities:["tun","userpass","challenge","split-route"],files:{"openvpn/lib/libssl.3.dylib":$ssl,"openvpn/lib/libcrypto.3.dylib":$crypto,"openvpn/lib/liblz4.1.dylib":$lz4,"openvpn/lib/liblzo2.2.dylib":$lzo}}' > "$packaged_openvpn/manifest.json"
 packaged_openvpn_intel="$stage_root/Library/Application Support/VPNToris/Engines/darwin-amd64/openvpn"
-codesign --force --options runtime --timestamp --sign "$VPNTORIS_MACOS_APPLICATION_IDENTITY" "$packaged_openvpn_intel/bin/openvpn"
+codesign "${CODESIGN_OPTS[@]}" "$packaged_openvpn_intel/bin/openvpn"
 openvpn_intel_sha256=$(shasum -a 256 "$packaged_openvpn_intel/bin/openvpn" | awk '{print $1}')
 jq -n --arg engine "$openvpn_intel_sha256" '{id:"openvpn",protocol:"openvpn",version:"2.7.5",os:"darwin",architecture:"amd64",executable:"openvpn/bin/openvpn",sha256:$engine,license:"GPL-2.0-only WITH OpenSSL-exception",capabilities:["tun","userpass","challenge","split-route"]}' > "$packaged_openvpn_intel/manifest.json"
 for packaged_openconnect in "$stage_root/Library/Application Support/VPNToris/Engines/darwin-arm64/openconnect" "$stage_root/Library/Application Support/VPNToris/Engines/darwin-amd64/openconnect"; do
-  for library in "$packaged_openconnect/lib/"*.dylib; do codesign --force --options runtime --timestamp --sign "$VPNTORIS_MACOS_APPLICATION_IDENTITY" "$library"; done
-  codesign --force --options runtime --timestamp --sign "$VPNTORIS_MACOS_APPLICATION_IDENTITY" "$packaged_openconnect/bin/openconnect"
-  codesign --force --options runtime --timestamp --sign "$VPNTORIS_MACOS_APPLICATION_IDENTITY" "$packaged_openconnect/bin/vpntoris-vpnc-script"
-  codesign --force --options runtime --timestamp --sign "$VPNTORIS_MACOS_APPLICATION_IDENTITY" "$packaged_openconnect/bin/vpntoris-browser-open"
+  for library in "$packaged_openconnect/lib/"*.dylib; do codesign "${CODESIGN_OPTS[@]}" "$library"; done
+  codesign "${CODESIGN_OPTS[@]}" "$packaged_openconnect/bin/openconnect"
+  codesign "${CODESIGN_OPTS[@]}" "$packaged_openconnect/bin/vpntoris-vpnc-script"
+  codesign "${CODESIGN_OPTS[@]}" "$packaged_openconnect/bin/vpntoris-browser-open"
   architecture=$(basename "$(dirname "$packaged_openconnect")" | sed 's/darwin-//')
   engine_sha256=$(shasum -a 256 "$packaged_openconnect/bin/openconnect" | awk '{print $1}')
   files=$(for asset in "$packaged_openconnect/lib/"*.dylib "$packaged_openconnect/bin/vpntoris-vpnc-script" "$packaged_openconnect/bin/vpntoris-browser-open"; do relative=${asset#"$packaged_openconnect/"}; printf '%s\t%s\n' "openconnect/$relative" "$(shasum -a 256 "$asset" | awk '{print $1}')"; done | jq -Rn '[inputs | split("\t") | {(.[0]): .[1]}] | add')
   jq -n --arg engine "$engine_sha256" --arg architecture "$architecture" --argjson files "$files" '{id:"openconnect",protocol:"openconnect",version:"9.21",os:"darwin",architecture:$architecture,executable:"openconnect/bin/openconnect",sha256:$engine,license:"LGPL-2.1-or-later",capabilities:["anyconnect","gp","pulse","nc","f5","fortinet","array","otp","split-route"],files:$files}' > "$packaged_openconnect/manifest.json"
 done
 for packaged_strongswan in "$stage_root/Library/Application Support/VPNToris/Engines/darwin-arm64/strongswan" "$stage_root/Library/Application Support/VPNToris/Engines/darwin-amd64/strongswan"; do
-  for library in "$packaged_strongswan/lib/"* "$packaged_strongswan/plugins/"*; do codesign --force --options runtime --timestamp --sign "$VPNTORIS_MACOS_APPLICATION_IDENTITY" "$library"; done
-  codesign --force --options runtime --timestamp --sign "$VPNTORIS_MACOS_APPLICATION_IDENTITY" "$packaged_strongswan/bin/swanctl"
-  codesign --force --options runtime --timestamp --sign "$VPNTORIS_MACOS_APPLICATION_IDENTITY" "$packaged_strongswan/bin/charon"
+  for library in "$packaged_strongswan/lib/"* "$packaged_strongswan/plugins/"*; do codesign "${CODESIGN_OPTS[@]}" "$library"; done
+  codesign "${CODESIGN_OPTS[@]}" "$packaged_strongswan/bin/swanctl"
+  codesign "${CODESIGN_OPTS[@]}" "$packaged_strongswan/bin/charon"
   architecture=$(basename "$(dirname "$packaged_strongswan")" | sed 's/darwin-//')
   engine_sha256=$(shasum -a 256 "$packaged_strongswan/bin/charon" | awk '{print $1}')
   files=$(find "$packaged_strongswan/bin" "$packaged_strongswan/lib" "$packaged_strongswan/plugins" -type f ! -path '*/bin/charon' -print | sort | while IFS= read -r asset; do relative=${asset#"$packaged_strongswan/"}; printf '%s\t%s\n' "strongswan/$relative" "$(shasum -a 256 "$asset" | awk '{print $1}')"; done | jq -Rn '[inputs | split("\t") | {(.[0]): .[1]}] | add')
@@ -133,6 +144,11 @@ xattr -cr "$stage_root" "$scripts_root" 2>/dev/null || true
 # Drop AppleDouble (._*) junk that can sneak into --scripts / payload.
 find "$stage_root" "$scripts_root" \( -name '._*' -o -name '.DS_Store' \) -delete 2>/dev/null || true
 rm -f "$output_path"
-pkgbuild --root "$stage_root" --scripts "$scripts_root" --identifier com.vpntoris.native-engine --version 2.0.0 --install-location / --sign "$VPNTORIS_MACOS_INSTALLER_IDENTITY" "$output_path"
-pkgutil --check-signature "$output_path" || true
-echo "Native engine PKG ready: $output_path"
+if [[ "$UNSIGNED" == "1" || "$UNSIGNED" == "true" ]]; then
+  pkgbuild --root "$stage_root" --scripts "$scripts_root" --identifier com.vpntoris.native-engine --version 2.0.0 --install-location / "$output_path"
+  echo "Native engine PKG ready (UNSIGNED / dev): $output_path"
+else
+  pkgbuild --root "$stage_root" --scripts "$scripts_root" --identifier com.vpntoris.native-engine --version 2.0.0 --install-location / --sign "$VPNTORIS_MACOS_INSTALLER_IDENTITY" "$output_path"
+  pkgutil --check-signature "$output_path" || true
+  echo "Native engine PKG ready: $output_path"
+fi

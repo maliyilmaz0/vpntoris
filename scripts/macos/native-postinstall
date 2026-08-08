@@ -1,18 +1,43 @@
 #!/bin/zsh
+# Native engine component postinstall.
+# Install files are already on disk; helper registration should not roll back
+# the whole product if launchctl fails (common with unsigned/dev helpers).
 
-set -euo pipefail
+set -u
 
 label=com.vpntoris.native-helper
 plist=/Library/LaunchDaemons/com.vpntoris.native-helper.plist
-console_uid=$(stat -f %u /dev/console)
-/usr/libexec/PlistBuddy -c "Set :ProgramArguments:2 $console_uid" "$plist"
-chown root:wheel "$plist" /Library/PrivilegedHelperTools/com.vpntoris.native-helper
-chmod 0644 "$plist"
-chmod 0755 /Library/PrivilegedHelperTools/com.vpntoris.native-helper
+helper=/Library/PrivilegedHelperTools/com.vpntoris.native-helper
+engines="/Library/Application Support/VPNToris/Engines"
+
+console_uid=$(stat -f %u /dev/console 2>/dev/null || echo 501)
+
+# Clear quarantine on payload (unsigned/dev packages).
+/usr/bin/xattr -dr com.apple.quarantine "$helper" "$engines" 2>/dev/null || true
+
+if [[ -f $plist ]]; then
+  /usr/libexec/PlistBuddy -c "Set :ProgramArguments:2 $console_uid" "$plist" 2>/dev/null || true
+  chown root:wheel "$plist" 2>/dev/null || true
+  chmod 0644 "$plist" 2>/dev/null || true
+fi
+
+if [[ -f $helper ]]; then
+  chown root:wheel "$helper" 2>/dev/null || true
+  chmod 0755 "$helper" 2>/dev/null || true
+fi
+
 # A running charon keeps the previous plugin image mapped in memory. Stop only
 # VPNToris' bundled daemons so the next helper instance loads the new engine.
 /usr/bin/pkill -TERM -f '/Library/Application Support/VPNToris/Engines/darwin-[^ ]*/strongswan/bin/charon' >/dev/null 2>&1 || true
 /bin/rm -f /var/run/vpntoris-native/charon.vici /var/run/vpntoris-native/charon.pid
+
 /bin/launchctl bootout "system/$label" >/dev/null 2>&1 || true
-/bin/launchctl bootstrap system "$plist"
-/bin/launchctl enable "system/$label"
+if [[ -f $plist ]]; then
+  if ! /bin/launchctl bootstrap system "$plist" 2>/dev/null; then
+    echo "warning: launchctl bootstrap failed for $label (unsigned helper or SIP). Files are installed; load manually after codesign if needed." >&2
+  else
+    /bin/launchctl enable "system/$label" 2>/dev/null || true
+  fi
+fi
+
+exit 0

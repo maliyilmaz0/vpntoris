@@ -104,6 +104,32 @@ struct AnalyticsTraffic: Codable { let received: UInt64; let sent: UInt64 }
 struct AnalyticsProfile: Codable, Identifiable { var id: String { name }; let name: String; let received: UInt64; let sent: UInt64; let reconnects: Int; let hourly: [String: AnalyticsTraffic]; let daily: [String: AnalyticsTraffic]; let destinations: [String: Int]; let processes: [String: Int] }
 struct AnalyticsSettings: Codable { let hourlyDays: Int; let dailyDays: Int }
 
+enum DisplayPreferences {
+    private static let popoverKey = "display.showPopoverTraffic"
+    private static let menuBarKey = "display.showMenuBarTraffic"
+
+    /// Traffic rates/totals inside the popover profile cards (default on).
+    static var showPopoverTraffic: Bool {
+        get {
+            let defaults = UserDefaults.standard
+            return defaults.object(forKey: popoverKey) == nil ? true : defaults.bool(forKey: popoverKey)
+        }
+        set { UserDefaults.standard.set(newValue, forKey: popoverKey) }
+    }
+
+    /// Live rates in the menu bar status item title (default off).
+    static var showMenuBarTraffic: Bool {
+        get {
+            let defaults = UserDefaults.standard
+            return defaults.object(forKey: menuBarKey) == nil ? false : defaults.bool(forKey: menuBarKey)
+        }
+        set { UserDefaults.standard.set(newValue, forKey: menuBarKey) }
+    }
+
+    static let didChange = Notification.Name("VPNTorisDisplayPreferencesDidChange")
+    static let trafficDidUpdate = Notification.Name("VPNTorisTrafficDidUpdate")
+}
+
 enum AppNotifications {
     static func enabled(_ event: String) -> Bool { let key = "notifications.\(event)"; return UserDefaults.standard.object(forKey: key) == nil || UserDefaults.standard.bool(forKey: key) }
     static func send(_ event: String, title: String, body: String, id: String, sound: Bool = true) {
@@ -344,6 +370,7 @@ enum ProfileKeychain {
             let (data, _) = try await URLSession.shared.data(from: api.appending(path: "api/traffic"))
             let items = try JSONDecoder().decode([TrafficStatus].self, from: data)
             traffic = Dictionary(uniqueKeysWithValues: items.map { ($0.name, $0) })
+            NotificationCenter.default.post(name: DisplayPreferences.trafficDidUpdate, object: nil, userInfo: ["items": items])
             for item in items {
                 var history = trafficHistory[item.name] ?? []
                 history.append(item.receiveBps + item.sendBps)
@@ -592,8 +619,8 @@ struct ProfileEditor: View {
             Toggle("Reconnect automatically if the tunnel drops", isOn: Binding(get: { profile.autoReconnect ?? true }, set: { profile.autoReconnect = $0 }))
             Toggle("Connect when VPNToris opens", isOn: Binding(get: { profile.connectOnLaunch ?? false }, set: { profile.connectOnLaunch = $0 })).disabled(profile.twoFactor ?? false)
             TextField("VPN routes (10.68.0.0/16, …)", text: $profile.routes)
-            TextField("Split DNS domains (corp.example.com, …)", text: Binding(get: { profile.domains ?? "" }, set: { profile.domains = $0 }))
-            TextField("VPN DNS servers (10.0.0.53, …)", text: Binding(get: { profile.dnsServers ?? "" }, set: { profile.dnsServers = $0 }))
+            TextField("Split DNS domains (required with DNS, e.g. rakort.dev)", text: Binding(get: { profile.domains ?? "" }, set: { profile.domains = $0 }))
+            TextField("VPN DNS servers (required with domains, e.g. 10.38.1.10)", text: Binding(get: { profile.dnsServers ?? "" }, set: { profile.dnsServers = $0 }))
             TextField("Description", text: $profile.description)
             if profile.type == "openvpn" {
                 VStack(alignment: .leading, spacing: 8) {
@@ -727,6 +754,7 @@ struct ContentView: View {
     @State private var showUpdates = false
     @State private var showAnalytics = false
     @State private var showNotifications = false
+    @State private var showDisplay = false
     @State private var showBackup = false
     @State private var showLanguage = false
     @State private var showHelp = false
@@ -735,6 +763,14 @@ struct ContentView: View {
     @State private var pendingOTP: Set<String> = []
     @State private var submittedOTP: Set<String> = []
     @State private var otpCodes: [String: String] = [:]
+    @State private var profileSearch = ""
+    @AppStorage("display.showPopoverTraffic") private var showPopoverTraffic = true
+
+    private var filteredProfiles: [ProfileStatus] {
+        let query = profileSearch.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !query.isEmpty else { return store.profiles }
+        return store.profiles.filter { profileMatchesSearch($0, query: query) }
+    }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -748,6 +784,7 @@ struct ContentView: View {
                     Button("Route Tester", systemImage: "scope") { showRouteTest = true }
                     Button("Connection History", systemImage: "clock.arrow.circlepath") { showHistory = true }
                     Button("Traffic Analytics", systemImage: "chart.xyaxis.line") { showAnalytics = true }
+                    Button("Display", systemImage: "eye") { showDisplay = true }
                     Button("Notifications", systemImage: "bell.badge") { showNotifications = true }
                     Button("Language", systemImage: "character.bubble") { showLanguage = true }
                     Button("Help and CLI", systemImage: "questionmark.circle") { showHelp = true }
@@ -762,6 +799,23 @@ struct ContentView: View {
                 } label: { Image(systemName: "ellipsis.circle") }.menuStyle(.borderlessButton).frame(width: 34)
                 Button { oldName = nil; editing = VPNProfile() } label: { Image(systemName: "plus") }.buttonStyle(.bordered)
             }.padding(18)
+            HStack(spacing: 8) {
+                Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
+                TextField("Search profiles (name, host, IP, DNS, routes…)", text: $profileSearch)
+                    .textFieldStyle(.plain)
+                if !profileSearch.isEmpty {
+                    Button {
+                        profileSearch = ""
+                    } label: {
+                        Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary)
+                    }.buttonStyle(.plain)
+                }
+            }
+            .padding(.horizontal, 10)
+            .padding(.vertical, 7)
+            .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 8))
+            .padding(.horizontal, 18)
+            .padding(.bottom, 10)
             Divider()
             if requiresDocker && store.docker.state != "ready" {
                 HStack(spacing: 10) {
@@ -784,8 +838,23 @@ struct ContentView: View {
                 }.padding(10).background(.orange.opacity(0.12))
             }
             if !store.error.isEmpty { Text(store.error).font(.caption).foregroundStyle(.red).padding(10) }
+            if filteredProfiles.isEmpty {
+                VStack(spacing: 8) {
+                    Image(systemName: profileSearch.isEmpty ? "shield.lefthalf.filled" : "magnifyingglass")
+                        .font(.largeTitle)
+                        .foregroundStyle(.secondary)
+                    Text(profileSearch.isEmpty ? "No VPN profiles yet" : "No profiles match “\(profileSearch)”")
+                        .font(.headline)
+                    if !profileSearch.isEmpty {
+                        Text("Try name, host, IP, DNS, routes or description.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            }
             List {
-                ForEach(store.profiles) { profile in
+                ForEach(filteredProfiles) { profile in
                         VStack(alignment: .leading, spacing: 10) {
                             HStack {
                                 Image(systemName: profileTypeIcon(profile.type)).font(.title3).foregroundStyle(profile.connected ? .green : .secondary).frame(width: 28)
@@ -818,7 +887,7 @@ struct ContentView: View {
                             if profile.routeStatus == "adding" { HStack { ProgressView().controlSize(.small); Text("Adding routes…").font(.caption) }.foregroundStyle(.orange) }
                             if profile.routeStatus == "ready" && profile.connected { Label("Routes active", systemImage: "checkmark.circle.fill").font(.caption).foregroundStyle(.green) }
                             if profile.routeStatus == "failed" { Label("Routes could not be added", systemImage: "exclamationmark.triangle.fill").font(.caption).foregroundStyle(.red) }
-                            if profile.connected, let traffic = store.traffic[profile.name] {
+                            if showPopoverTraffic, profile.connected, let traffic = store.traffic[profile.name] {
                                 HStack(spacing: 12) {
                                     Label(byteRate(traffic.receiveBps), systemImage: "arrow.down").foregroundStyle(.green)
                                     Label(byteRate(traffic.sendBps), systemImage: "arrow.up").foregroundStyle(.blue)
@@ -845,9 +914,9 @@ struct ContentView: View {
                             }.buttonStyle(.borderless)
                         }.padding(14).background(.thinMaterial, in: RoundedRectangle(cornerRadius: 14)).listRowInsets(EdgeInsets(top: 5, leading: 14, bottom: 5, trailing: 14)).listRowSeparator(.hidden).listRowBackground(Color.clear).swipeActions(edge: .trailing, allowsFullSwipe: false) { Button(role: .destructive) { deleting = profile } label: { Image(systemName: "trash.fill") }.tint(.red).accessibilityLabel("Delete") }
                 }
-            }.listStyle(.plain).scrollContentBackground(.hidden).padding(.horizontal, 7).animation(.easeInOut(duration: 0.25), value: store.profiles.map(\.name))
+            }.listStyle(.plain).scrollContentBackground(.hidden).padding(.horizontal, 7).animation(.easeInOut(duration: 0.25), value: filteredProfiles.map(\.name))
             Divider(); HStack { Circle().fill(!requiresDocker || store.docker.state == "ready" ? Color.green : Color.orange).frame(width: 7); Text(requiresDocker ? (store.docker.state == "ready" ? "Docker ready" : "Docker unavailable") : "Native engine ready").font(.caption).foregroundStyle(.secondary); Text("v\(updater.currentVersion)").font(.caption.monospacedDigit()).foregroundStyle(.tertiary).help("VPNToris version \(updater.currentVersion)"); Spacer(); Button("Touch ID") { showTouchIDHelp = true }.buttonStyle(.borderless); Button("Quit") { NSApplication.shared.terminate(nil) }.buttonStyle(.borderless) }.padding(12)
-        }.frame(width: 410, height: 560).task {
+        }.frame(width: 410, height: 600).task {
             store.migrateLegacyCredentials()
             discoveredProfiles = discoverInstalledProfiles()
             await store.refresh()
@@ -878,6 +947,7 @@ struct ContentView: View {
         .sheet(isPresented: $showUpdates) { UpdateView(updater: updater) }
         .sheet(isPresented: $showAnalytics) { AnalyticsView() }
         .sheet(isPresented: $showNotifications) { NotificationSettingsView() }
+        .sheet(isPresented: $showDisplay) { DisplaySettingsView() }
         .sheet(isPresented: $showBackup) { BackupView(store: store) }
         .sheet(isPresented: $showLanguage) { LanguageSettingsView() }
         .sheet(isPresented: $showHelp) { HelpView() }
@@ -922,6 +992,44 @@ struct ContentView: View {
         let minutes = (seconds % 3600) / 60
         let remaining = seconds % 60
         return hours > 0 ? String(format: "%02d:%02d:%02d", hours, minutes, remaining) : String(format: "%02d:%02d", minutes, remaining)
+    }
+
+    /// Case-insensitive match against status fields and full stored profile (host, DNS, routes, config text, etc.).
+    private func profileMatchesSearch(_ profile: ProfileStatus, query: String) -> Bool {
+        let needle = query.lowercased()
+        var parts: [String] = [
+            profile.name,
+            profile.description,
+            profile.type,
+            profile.protocol,
+            profile.host,
+            profile.activeGateway,
+            profile.routes,
+            profile.routeStatus,
+            profile.connected ? "connected" : "disconnected",
+            String(profile.gatewayCount),
+        ]
+        if let stored = store.storedProfile(named: profile.name) {
+            parts.append(contentsOf: [
+                stored.name,
+                stored.description,
+                stored.type,
+                stored.host,
+                stored.backupGateways ?? "",
+                stored.port,
+                stored.user,
+                stored.routes,
+                stored.domains ?? "",
+                stored.dnsServers ?? "",
+                stored.config,
+                stored.openConnectProtocol ?? "",
+                stored.ipsec?.localID ?? "",
+                stored.ipsec?.remoteID ?? "",
+                stored.ipsec?.localSelectors ?? "",
+                stored.ipsec?.remoteSelectors ?? "",
+            ])
+        }
+        return parts.joined(separator: "\n").lowercased().contains(needle)
     }
 
     private func notifyOTP(_ profile: String) {
@@ -1174,6 +1282,46 @@ struct NotificationSettingsView: View {
     }
 }
 
+struct DisplaySettingsView: View {
+    @Environment(\.dismiss) private var dismiss
+    @AppStorage("display.showPopoverTraffic") private var showPopoverTraffic = true
+    @AppStorage("display.showMenuBarTraffic") private var showMenuBarTraffic = false
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            HStack {
+                Text("Display").font(.title2.bold())
+                Spacer()
+                Button("Done") {
+                    NotificationCenter.default.post(name: DisplayPreferences.didChange, object: nil)
+                    dismiss()
+                }
+            }
+            GroupBox("Traffic") {
+                VStack(alignment: .leading, spacing: 10) {
+                    Toggle("Show traffic in profile list", isOn: $showPopoverTraffic)
+                    Text("Rates, totals and sparkline under each connected profile in the popover.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    Toggle("Show live rates in menu bar", isOn: $showMenuBarTraffic)
+                    Text("When a VPN is connected, the menu bar icon shows combined ↓/↑ rates (for example ↓1.2 MB/s ↑340 KB/s).")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
+        }
+        .padding(22)
+        .frame(width: 480)
+        .onChange(of: showPopoverTraffic) { _ in
+            NotificationCenter.default.post(name: DisplayPreferences.didChange, object: nil)
+        }
+        .onChange(of: showMenuBarTraffic) { _ in
+            NotificationCenter.default.post(name: DisplayPreferences.didChange, object: nil)
+        }
+    }
+}
+
 struct AnalyticsView: View {
     struct Point: Identifiable { let id: String; let label: String; let received: UInt64; let sent: UInt64 }
     @Environment(\.dismiss) private var dismiss
@@ -1348,6 +1496,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var statusItem: NSStatusItem!
     private let popover = NSPopover()
     private var contentController: NSViewController!
+    private var menuBarTrafficTimer: Timer?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory)
@@ -1359,7 +1508,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let process = Process(); process.executableURL = Bundle.main.bundleURL.appending(path: "Contents/MacOS/vpntorisd"); process.arguments = ["--daemon", String(ProcessInfo.processInfo.processIdentifier)]; try? process.run(); daemon = process
 
 
-        popover.contentSize = NSSize(width: 410, height: 560)
+        popover.contentSize = NSSize(width: 410, height: 600)
         popover.behavior = .transient
         popover.animates = true
         contentController = NSHostingController(rootView: ContentView())
@@ -1375,17 +1524,96 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 button.image = NSImage(systemSymbolName: "shield.lefthalf.filled", accessibilityDescription: "VPNToris")
                 button.image?.isTemplate = true
             }
+            button.imagePosition = .imageLeading
             button.toolTip = "VPNToris"
             button.target = self
             button.action = #selector(togglePopover(_:))
         }
         NSWorkspace.shared.notificationCenter.addObserver(self, selector: #selector(systemDidWake), name: NSWorkspace.didWakeNotification, object: nil)
+        NotificationCenter.default.addObserver(self, selector: #selector(displayPreferencesDidChange), name: DisplayPreferences.didChange, object: nil)
+        NotificationCenter.default.addObserver(self, selector: #selector(trafficDidUpdate(_:)), name: DisplayPreferences.trafficDidUpdate, object: nil)
+        startMenuBarTrafficTimerIfNeeded()
     }
 
     @objc private func systemDidWake() {
         var request = URLRequest(url: URL(string: "http://127.0.0.1:17984/api/recover")!)
         request.httpMethod = "POST"
         URLSession.shared.dataTask(with: request).resume()
+    }
+
+    @objc private func displayPreferencesDidChange() {
+        startMenuBarTrafficTimerIfNeeded()
+        if !DisplayPreferences.showMenuBarTraffic {
+            clearMenuBarTraffic()
+        } else {
+            pollMenuBarTraffic()
+        }
+    }
+
+    @objc private func trafficDidUpdate(_ notification: Notification) {
+        guard DisplayPreferences.showMenuBarTraffic else { return }
+        if let items = notification.userInfo?["items"] as? [TrafficStatus] {
+            applyMenuBarTraffic(items)
+        }
+    }
+
+    private func startMenuBarTrafficTimerIfNeeded() {
+        menuBarTrafficTimer?.invalidate()
+        menuBarTrafficTimer = nil
+        guard DisplayPreferences.showMenuBarTraffic else {
+            clearMenuBarTraffic()
+            return
+        }
+        menuBarTrafficTimer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { [weak self] _ in
+            self?.pollMenuBarTraffic()
+        }
+        if let timer = menuBarTrafficTimer {
+            RunLoop.main.add(timer, forMode: .common)
+        }
+        pollMenuBarTraffic()
+    }
+
+    private func pollMenuBarTraffic() {
+        guard DisplayPreferences.showMenuBarTraffic else {
+            clearMenuBarTraffic()
+            return
+        }
+        guard let url = URL(string: "http://127.0.0.1:17984/api/traffic") else { return }
+        URLSession.shared.dataTask(with: url) { [weak self] data, _, _ in
+            guard let data, let items = try? JSONDecoder().decode([TrafficStatus].self, from: data) else { return }
+            DispatchQueue.main.async { self?.applyMenuBarTraffic(items) }
+        }.resume()
+    }
+
+    private func applyMenuBarTraffic(_ items: [TrafficStatus]) {
+        guard DisplayPreferences.showMenuBarTraffic else {
+            clearMenuBarTraffic()
+            return
+        }
+        guard let button = statusItem?.button else { return }
+        guard !items.isEmpty else {
+            button.title = ""
+            button.toolTip = "VPNToris"
+            return
+        }
+        let down = items.reduce(0.0) { $0 + $1.receiveBps }
+        let up = items.reduce(0.0) { $0 + $1.sendBps }
+        let formatter = ByteCountFormatter()
+        formatter.countStyle = .file
+        formatter.allowsNonnumericFormatting = false
+        let downText = formatter.string(fromByteCount: Int64(down))
+        let upText = formatter.string(fromByteCount: Int64(up))
+        button.title = " ↓\(downText)/s ↑\(upText)/s"
+        if items.count == 1 {
+            button.toolTip = "VPNToris · \(items[0].name)"
+        } else {
+            button.toolTip = "VPNToris · \(items.count) active tunnels"
+        }
+    }
+
+    private func clearMenuBarTraffic() {
+        statusItem?.button?.title = ""
+        statusItem?.button?.toolTip = "VPNToris"
     }
 
     @objc private func togglePopover(_ sender: Any?) {
@@ -1400,7 +1628,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
-    func applicationWillTerminate(_ notification: Notification) { NSWorkspace.shared.notificationCenter.removeObserver(self); daemon?.terminate() }
+    func applicationWillTerminate(_ notification: Notification) {
+        menuBarTrafficTimer?.invalidate()
+        NSWorkspace.shared.notificationCenter.removeObserver(self)
+        NotificationCenter.default.removeObserver(self)
+        daemon?.terminate()
+    }
 }
 
 @main struct VPNTorisApp: App {

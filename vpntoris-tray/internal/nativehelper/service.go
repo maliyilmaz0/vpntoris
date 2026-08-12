@@ -246,6 +246,13 @@ func (service *Service) Start(request fortihelper.Request) fortihelper.Response 
 			logFile.Close()
 			return fortihelper.Response{State: "failed", Error: "OpenConnect interface helper is missing"}
 		}
+		scriptPath, scriptErr = spaceFreeBinary(service.paths.RuntimeDirectory, scriptPath)
+		if scriptErr != nil {
+			readInput.Close()
+			writeInput.Close()
+			logFile.Close()
+			return fortihelper.Response{State: "failed", Error: scriptErr.Error()}
+		}
 		arguments = []string{
 			"--protocol=" + request.GatewayProtocol,
 			"--script=" + scriptPath,
@@ -265,6 +272,13 @@ func (service *Service) Start(request fortihelper.Request) fortihelper.Response 
 				writeInput.Close()
 				logFile.Close()
 				return fortihelper.Response{State: "failed", Error: "OpenConnect browser broker is missing"}
+			}
+			browserPath, browserErr = spaceFreeBinary(service.paths.RuntimeDirectory, browserPath)
+			if browserErr != nil {
+				readInput.Close()
+				writeInput.Close()
+				logFile.Close()
+				return fortihelper.Response{State: "failed", Error: browserErr.Error()}
 			}
 			arguments = append(arguments, "--external-browser="+browserPath)
 		}

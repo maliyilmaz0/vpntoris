@@ -8,6 +8,7 @@ import (
 	"vpntoris-tray/internal/fortihelper"
 )
 
+var pppUsingPattern = regexp.MustCompile(`(?m)Using interface (ppp[0-9]+)`)
 var pppReadyPattern = regexp.MustCompile(`(?m)Interface (ppp[0-9]+) is UP\.`)
 var openVPNReadyPattern = regexp.MustCompile(`(?m)(?:Opened (?:utun|tun) device |TUN/TAP device )((?:utun|tun|tap)[0-9]+)`)
 var openVPNWindowsReadyPattern = regexp.MustCompile(`(?m)(?:TAP-WIN32 device \[([^\]]+)\] opened|Wintun(?: Userspace Tunnel)? \[([^\]]+)\] opened|Opened tun device \[([^\]]+)\])`)
@@ -27,13 +28,17 @@ func InterfaceFromLogData(data []byte, protocol string) string {
 		}
 		return ""
 	}
-	pattern := pppReadyPattern
 	if protocol == fortihelper.ProtocolOpenConnect {
-		pattern = openConnectReadyPattern
-	} else if protocol == "" || protocol == fortihelper.ProtocolFortiGateSSL {
-		pattern = pppReadyPattern
+		matches := openConnectReadyPattern.FindSubmatch(data)
+		if len(matches) != 2 {
+			return ""
+		}
+		return string(matches[1])
 	}
-	matches := pattern.FindSubmatch(data)
+	if matches := pppUsingPattern.FindSubmatch(data); len(matches) == 2 {
+		return string(matches[1])
+	}
+	matches := pppReadyPattern.FindSubmatch(data)
 	if len(matches) != 2 {
 		return ""
 	}

@@ -43,6 +43,15 @@ func TestOpenVPNReadyPatterns(t *testing.T) {
 		}
 	}
 }
+func TestPPPInterfacePrefersPppdAssignment(t *testing.T) {
+	log := "Using interface ppp1\nConnect: ppp1 <--> /dev/ttys002\nInterface ppp0 is UP.\n"
+	if name := InterfaceFromLogData([]byte(log), fortihelper.ProtocolFortiGateSSL); name != "ppp1" {
+		t.Fatalf("concurrent ppp log => %q, want ppp1", name)
+	}
+	if name := InterfaceFromLogData([]byte("Interface ppp2 is UP.\n"), fortihelper.ProtocolFortiGateSSL); name != "ppp2" {
+		t.Fatalf("fallback log => %q, want ppp2", name)
+	}
+}
 func TestOpenConnectReadyPatternIdentifiesOwnedInterface(t *testing.T) {
 	if name := InterfaceFromLogData([]byte("VPNTORIS_INTERFACE=utun9\n"), fortihelper.ProtocolOpenConnect); name != "utun9" {
 		t.Fatalf("got %q", name)

@@ -1,0 +1,41 @@
+{
+  "created": "2026-08-17T15:19:43+03:00",
+  "version": "next",
+  "os": "darwin",
+  "arch": "arm64",
+  "paths": {
+    "platform": "darwin",
+    "architecture": "arm64",
+    "stateDirectory": "/Library/Application Support/VPNToris/State",
+    "runtimeDirectory": "/var/run/vpntoris-native",
+    "logDirectory": "/var/log/vpntoris",
+    "engineDirectory": "/Library/Application Support/VPNToris/Engines",
+    "helperSocket": "/var/run/vpntoris-native/helper.sock",
+    "routerSocket": "/var/run/vpntoris/router.sock"
+  },
+  "docker": {
+    "state": "checking",
+    "message": "Checking Docker…"
+  },
+  "profiles": [
+    {
+      "name": "fort",
+      "description": "bk",
+      "type": "openfortivpn",
+      "host": "88.255.219.66",
+      "backupGateways": "",
+      "failoverThreshold": 0,
+      "port": "8443",
+      "user": "rkocaoglu",
+      "password": "",
+      "twoFactor": false,
+      "autoReconnect": false,
+      "connectOnLaunch": false,
+      "routes": "10.0.0.201/32",
+      "domains": "",
+      "dnsServers": "",
+      "config": ""
+    }
+  ],
+  "traffic": []
+}

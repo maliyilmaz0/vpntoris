@@ -21,9 +21,10 @@ import (
 	"vpntoris-tray/internal/runtimepaths"
 )
 
-const imageName = "vpntoris-client:next-3"
-
 var safeNamePattern = regexp.MustCompile(`[^a-z0-9_.-]+`)
+
+// version is set at build time via -ldflags "-X main.version=...".
+var version = "dev"
 
 type VPNConfig struct {
 	Name                string       `json:"name"`
@@ -91,11 +92,6 @@ var proxyState = struct {
 	mappings map[string]proxyMapping
 	revision uint64
 }{mappings: make(map[string]proxyMapping)}
-var dockerBootstrap = struct {
-	sync.RWMutex
-	State   string `json:"state"`
-	Message string `json:"message"`
-}{State: "checking", Message: "Checking Docker…"}
 
 type trafficSnapshot struct {
 	Name       string  `json:"name"`
@@ -209,7 +205,6 @@ func main() {
 	go monitorTraffic()
 	go monitorConnections()
 	go monitorAnalyticsFlows()
-	go restoreHealthyRoutes()
 	if len(os.Args) > 2 && os.Args[1] == "--daemon" {
 		if parentPID, err := strconv.Atoi(os.Args[2]); err == nil {
 			go func() {
@@ -224,114 +219,6 @@ func main() {
 	}
 	select {}
 }
-func dockerPath() string {
-	if path, err := exec.LookPath("docker"); err == nil {
-		return path
-	}
-	for _, path := range []string{"/usr/local/bin/docker", "/opt/homebrew/bin/docker", "/Applications/Docker.app/Contents/Resources/bin/docker"} {
-		if info, err := os.Stat(path); err == nil && !info.IsDir() {
-			return path
-		}
-	}
-	return ""
-}
-func dockerCommand(arguments ...string) *exec.Cmd {
-	docker := dockerPath()
-	if docker == "" {
-		docker = "docker"
-	}
-	directories := []string{filepath.Dir(docker), "/Applications/Docker.app/Contents/Resources/bin", "/usr/local/bin", "/opt/homebrew/bin", "/usr/bin", "/bin", "/usr/sbin", "/sbin"}
-	seen := map[string]bool{}
-	path := []string{}
-	for _, directory := range append(directories, filepath.SplitList(os.Getenv("PATH"))...) {
-		if directory != "" && !seen[directory] {
-			seen[directory] = true
-			path = append(path, directory)
-		}
-	}
-	command := exec.Command(docker, arguments...)
-	for _, value := range os.Environ() {
-		if !strings.HasPrefix(value, "PATH=") {
-			command.Env = append(command.Env, value)
-		}
-	}
-	command.Env = append(command.Env, "PATH="+strings.Join(path, string(os.PathListSeparator)))
-	return command
-}
-func setDockerBootstrap(state, message string) {
-	dockerBootstrap.Lock()
-	dockerBootstrap.State = state
-	dockerBootstrap.Message = message
-	dockerBootstrap.Unlock()
-}
-func bootstrapDockerImage() {
-	docker := dockerPath()
-	if docker == "" {
-		setDockerBootstrap("missing", "Docker Desktop is not installed.")
-		return
-	}
-	if output, err := dockerCommand("info", "--format", "{{.ServerVersion}}").CombinedOutput(); err != nil {
-		message := strings.TrimSpace(string(output))
-		if message == "" {
-			message = "Docker Desktop is installed but the engine is not running."
-		}
-		setDockerBootstrap("stopped", message)
-		return
-	}
-	if dockerCommand("image", "inspect", imageName).Run() == nil {
-		setDockerBootstrap("ready", "Docker image is ready.")
-		return
-	}
-	executable, err := os.Executable()
-	if err != nil {
-		setDockerBootstrap("error", err.Error())
-		return
-	}
-	contextPath := filepath.Clean(filepath.Join(filepath.Dir(executable), "..", "Resources", "DockerContext"))
-	if _, err := os.Stat(filepath.Join(contextPath, "Dockerfile")); err != nil {
-		setDockerBootstrap("error", "The embedded Docker build context is missing.")
-		return
-	}
-	setDockerBootstrap("building", "Building the VPN client image for the first time…")
-	output, err := dockerCommand("build", "-t", imageName, contextPath).CombinedOutput()
-	if err != nil {
-		message := strings.TrimSpace(string(output))
-		if message == "" {
-			message = err.Error()
-		}
-		setDockerBootstrap("error", message)
-		return
-	}
-	setDockerBootstrap("ready", "Docker image is ready.")
-}
-func proxyPort(container string) (string, error) {
-	output, err := dockerCommand("port", container, "1080/tcp").Output()
-	if err != nil {
-		return "", fmt.Errorf("could not find the VPN proxy port")
-	}
-	address := strings.TrimSpace(strings.Split(string(output), "\n")[0])
-	separator := strings.LastIndex(address, ":")
-	if separator < 0 || separator == len(address)-1 {
-		return "", fmt.Errorf("invalid VPN proxy address: %s", address)
-	}
-	return address[separator+1:], nil
-}
-func containerPort(container, target string) (int, error) {
-	docker := dockerPath()
-	if docker == "" {
-		return 0, fmt.Errorf("docker is unavailable")
-	}
-	output, err := dockerCommand("port", container, target).Output()
-	if err != nil {
-		return 0, err
-	}
-	address := strings.TrimSpace(strings.Split(string(output), "\n")[0])
-	separator := strings.LastIndex(address, ":")
-	if separator < 0 {
-		return 0, fmt.Errorf("invalid container port")
-	}
-	return strconv.Atoi(address[separator+1:])
-}
 func splitValues(value string) []string {
 	fields := strings.FieldsFunc(value, func(character rune) bool {
 		return character == ',' || character == ';' || character == '\n' || character == ' '
@@ -343,41 +230,6 @@ func splitValues(value string) []string {
 		}
 	}
 	return result
-}
-func resolveDomains(config VPNConfig) []string {
-	addresses := map[string]bool{}
-	for _, domain := range splitValues(config.Domains) {
-		output, err := dockerCommand("exec", containerName(config.Name), "getent", "ahostsv4", domain).Output()
-		if err != nil {
-			continue
-		}
-		for _, line := range strings.Split(string(output), "\n") {
-			fields := strings.Fields(line)
-			if len(fields) > 0 && net.ParseIP(fields[0]).To4() != nil {
-				addresses[fields[0]] = true
-			}
-		}
-	}
-	result := make([]string, 0, len(addresses))
-	for address := range addresses {
-		result = append(result, address)
-	}
-	sort.Strings(result)
-	return result
-}
-func activateProfileRoutes(config VPNConfig, port string) error {
-	routeList := config.Routes
-	for _, server := range splitValues(config.DNSServers) {
-		routeList += "," + server + "/32"
-	}
-	for _, address := range resolveDomains(config) {
-		routeList += "," + address + "/32"
-	}
-	dnsPort := 0
-	if config.Domains != "" && config.DNSServers != "" {
-		dnsPort, _ = containerPort(containerName(config.Name), "53/udp")
-	}
-	return setSystemRoutesWithDNS(containerName(config.Name), port, routeList, config.Domains, dnsPort, true)
 }
 func setSystemRoutes(key, port, routeList string, enabled bool) error {
 	return setSystemRoutesWithDNS(key, port, routeList, "", 0, enabled)
@@ -534,7 +386,6 @@ func startPACServer() error {
 	mux.HandleFunc("/api/reset", handleResetAPI)
 	mux.HandleFunc("/api/logs", handleLogsAPI)
 	mux.HandleFunc("/api/routes", handleRoutesAPI)
-	mux.HandleFunc("/api/docker", handleDockerAPI)
 	mux.HandleFunc("/api/traffic", handleTrafficAPI)
 	mux.HandleFunc("/api/history", handleHistoryAPI)
 	mux.HandleFunc("/api/route-check", handleRouteCheckAPI)
@@ -612,11 +463,6 @@ func resetAllConnections() error {
 	if nativeHelperReady() {
 		_ = nativeFortiReset()
 	}
-	for _, config := range configs {
-		if config.Type != "ipsec" && config.Type != "openfortivpn" && config.Type != "openvpn" && config.Type != "openconnect" {
-			_ = disconnectVPN(containerName(config.Name))
-		}
-	}
 	proxyState.Lock()
 	proxyState.mappings = make(map[string]proxyMapping)
 	proxyState.revision++
@@ -634,12 +480,6 @@ func handleDiagnosticsAPI(response http.ResponseWriter, _ *http.Request) {
 			configs[index].IPSec.PreSharedKey = ""
 		}
 	}
-	dockerBootstrap.RLock()
-	dockerStatus := struct {
-		State   string `json:"state"`
-		Message string `json:"message"`
-	}{dockerBootstrap.State, sanitizeDiagnosticText(dockerBootstrap.Message)}
-	dockerBootstrap.RUnlock()
 	trafficState.RLock()
 	traffic := make([]trafficSnapshot, 0, len(trafficState.items))
 	for _, item := range trafficState.items {
@@ -653,10 +493,9 @@ func handleDiagnosticsAPI(response http.ResponseWriter, _ *http.Request) {
 		OS       string             `json:"os"`
 		Arch     string             `json:"arch"`
 		Paths    runtimepaths.Paths `json:"paths"`
-		Docker   any                `json:"docker"`
 		Profiles []VPNConfig        `json:"profiles"`
 		Traffic  []trafficSnapshot  `json:"traffic"`
-	}{time.Now().Format(time.RFC3339), "next", runtime.GOOS, runtime.GOARCH, paths, dockerStatus, configs, traffic}
+	}{time.Now().Format(time.RFC3339), version, runtime.GOOS, runtime.GOARCH, paths, configs, traffic}
 	data, _ := json.MarshalIndent(summary, "", "  ")
 	writeDiagnosticFile(archive, "summary.json", data)
 	writePlatformDiagnostics(archive)
@@ -664,16 +503,9 @@ func handleDiagnosticsAPI(response http.ResponseWriter, _ *http.Request) {
 		if nativeLog, err := os.ReadFile(paths.ProfileLog(nativeProfileID(config.Name))); err == nil {
 			writeDiagnosticFile(archive, "native/"+safeFileName(config.Name)+".log", []byte(sanitizeDiagnosticText(string(nativeLog))))
 		}
-	}
-	if docker := dockerPath(); docker != "" {
-		writeDiagnosticCommand(archive, "docker-containers.txt", docker, "ps", "-a", "--filter", "label=vpntoris=true", "--format", "{{.Names}}\t{{.Status}}\t{{.Image}}")
-		for _, config := range configs {
-			output, _ := dockerCommand("logs", "--tail", "500", containerName(config.Name)).CombinedOutput()
-			writeDiagnosticFile(archive, "logs/"+safeFileName(config.Name)+".log", []byte(sanitizeDiagnosticText(string(output))))
-			if paths.RouterSocket != "" {
-				if helperLog, err := os.ReadFile(filepath.Join(filepath.Dir(paths.RouterSocket), containerName(config.Name)+".log")); err == nil {
-					writeDiagnosticFile(archive, "route-helper/"+safeFileName(config.Name)+".log", []byte(sanitizeDiagnosticText(string(helperLog))))
-				}
+		if paths.RouterSocket != "" {
+			if helperLog, err := os.ReadFile(filepath.Join(filepath.Dir(paths.RouterSocket), containerName(config.Name)+".log")); err == nil {
+				writeDiagnosticFile(archive, "route-helper/"+safeFileName(config.Name)+".log", []byte(sanitizeDiagnosticText(string(helperLog))))
 			}
 		}
 	}
@@ -956,8 +788,6 @@ func handleRecoverAPI(response http.ResponseWriter, request *http.Request) {
 		http.Error(response, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	go bootstrapDockerImage()
-	go restoreHealthyRoutes()
 	response.WriteHeader(http.StatusNoContent)
 }
 func handleTrafficAPI(response http.ResponseWriter, _ *http.Request) {
@@ -1001,16 +831,6 @@ func monitorTraffic() {
 				updateTrafficSnapshot(config.Name, received, sent, duration)
 				continue
 			}
-			container := containerName(config.Name)
-			if !containerRunning(container) {
-				continue
-			}
-			received, sent, err := containerTraffic(container)
-			if err != nil {
-				continue
-			}
-			seen[config.Name] = true
-			updateTrafficSnapshot(config.Name, received, sent, containerDuration(container))
 		}
 		trafficState.Lock()
 		for name := range trafficState.items {
@@ -1039,26 +859,6 @@ func updateTrafficSnapshot(name string, received uint64, sent uint64, duration i
 		}
 	}
 	trafficState.items[name] = item
-}
-func containerTraffic(container string) (uint64, uint64, error) {
-	docker := dockerPath()
-	if docker == "" {
-		return 0, 0, fmt.Errorf("docker is unavailable")
-	}
-	output, err := dockerCommand("stats", "--no-stream", "--format", "{{.NetIO}}", container).Output()
-	if err != nil {
-		return 0, 0, err
-	}
-	parts := strings.Split(strings.TrimSpace(string(output)), "/")
-	if len(parts) != 2 {
-		return 0, 0, fmt.Errorf("invalid docker traffic output")
-	}
-	received, err := parseByteSize(parts[0])
-	if err != nil {
-		return 0, 0, err
-	}
-	sent, err := parseByteSize(parts[1])
-	return received, sent, err
 }
 func parseByteSize(value string) (uint64, error) {
 	value = strings.TrimSpace(value)
@@ -1096,39 +896,6 @@ func parseByteSize(value string) (uint64, error) {
 	}
 	return uint64(number * multiplier), nil
 }
-func containerDuration(container string) int64 {
-	docker := dockerPath()
-	if docker == "" {
-		return 0
-	}
-	output, err := dockerCommand("inspect", "--format", "{{.State.StartedAt}}", container).Output()
-	if err != nil {
-		return 0
-	}
-	started, err := time.Parse(time.RFC3339Nano, strings.TrimSpace(string(output)))
-	if err != nil {
-		return 0
-	}
-	return int64(time.Since(started).Seconds())
-}
-func handleDockerAPI(response http.ResponseWriter, request *http.Request) {
-	if request.Method == http.MethodPost {
-		dockerBootstrap.RLock()
-		state := dockerBootstrap.State
-		dockerBootstrap.RUnlock()
-		if state != "building" {
-			go bootstrapDockerImage()
-		}
-	}
-	dockerBootstrap.RLock()
-	status := struct {
-		State   string `json:"state"`
-		Message string `json:"message"`
-	}{dockerBootstrap.State, dockerBootstrap.Message}
-	dockerBootstrap.RUnlock()
-	response.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(response).Encode(status)
-}
 func monitorActiveProxy() {
 	failures := map[string]int{}
 	for {
@@ -1151,26 +918,6 @@ func monitorActiveProxy() {
 				_ = setSystemRoutes(key, "", "", false)
 				delete(failures, key)
 			}
-		}
-	}
-}
-func restoreHealthyRoutes() {
-	time.Sleep(time.Second)
-	configs, err := loadConfigs()
-	if err != nil {
-		return
-	}
-	for _, config := range configs {
-		key := containerName(config.Name)
-		if !containerHealthy(key) {
-			continue
-		}
-		port, err := proxyPort(key)
-		if err != nil {
-			continue
-		}
-		if activateProfileRoutes(config, port) == nil {
-			setRouteStatus(config.Name, "ready")
 		}
 	}
 }
@@ -1328,11 +1075,7 @@ func handleProfilesDelete(response http.ResponseWriter, request *http.Request) {
 	otpRequests.Unlock()
 	_ = setSystemRoutes(containerName(selected.Name), "", "", false)
 	setRouteStatus(selected.Name, "")
-	if nativeFortiSupported(*selected) || nativeOpenVPNSupported(*selected) || nativeOpenConnectSupported(*selected) || nativeIPSecSupported(*selected) {
-		_ = nativeFortiDisconnect(selected.Name)
-	} else {
-		_ = disconnectVPN(containerName(selected.Name))
-	}
+	_ = nativeFortiDisconnect(selected.Name)
 	deleteGatewayState(selected.Name)
 	if err := deleteConfig(selected.Name); err != nil {
 		http.Error(response, err.Error(), http.StatusInternalServerError)
@@ -1425,41 +1168,19 @@ func handleActionAPI(response http.ResponseWriter, request *http.Request) {
 		otpRequests.Unlock()
 		_ = setSystemRoutes(containerName(selected.Name), "", "", false)
 		setRouteStatus(selected.Name, "")
-		if nativeFortiSupported(*selected) || nativeOpenVPNSupported(*selected) || nativeOpenConnectSupported(*selected) || nativeIPSecSupported(*selected) {
-			err = nativeFortiDisconnect(selected.Name)
-		} else {
-			err = disconnectVPN(containerName(selected.Name))
-		}
+		err = nativeFortiDisconnect(selected.Name)
 		if err == nil {
 			recordHistory(selected.Name, "disconnected")
 		}
 	case "route":
-		if nativeFortiSupported(*selected) || nativeOpenVPNSupported(*selected) || nativeOpenConnectSupported(*selected) || nativeIPSecSupported(*selected) {
-			if nativeFortiConnected(selected.Name) {
-				setRouteStatus(selected.Name, "ready")
-			} else {
-				err = fmt.Errorf("native VPN tunnel is not connected")
-			}
-			break
-		}
-		setRouteStatus(selected.Name, "adding")
-		var port string
-		port, err = proxyPort(containerName(selected.Name))
-		if err == nil {
-			err = activateProfileRoutes(*selected, port)
-		}
-		if err == nil {
+		if nativeFortiConnected(selected.Name) {
 			setRouteStatus(selected.Name, "ready")
 		} else {
-			setRouteStatus(selected.Name, "failed")
+			err = fmt.Errorf("native VPN tunnel is not connected")
 		}
 	case "delete":
 		_ = setSystemRoutes(containerName(selected.Name), "", "", false)
-		if nativeFortiSupported(*selected) || nativeOpenVPNSupported(*selected) || nativeOpenConnectSupported(*selected) || nativeIPSecSupported(*selected) {
-			_ = nativeFortiDisconnect(selected.Name)
-		} else {
-			_ = disconnectVPN(containerName(selected.Name))
-		}
+		_ = nativeFortiDisconnect(selected.Name)
 		deleteGatewayState(selected.Name)
 		err = deleteConfig(selected.Name)
 	default:
@@ -1600,24 +1321,10 @@ func handleLogsAPI(response http.ResponseWriter, request *http.Request) {
 		http.Error(response, "profile not found", 404)
 		return
 	}
-	if nativeFortiSupported(*selected) || nativeOpenVPNSupported(*selected) || nativeOpenConnectSupported(*selected) || nativeIPSecSupported(*selected) {
-		output, err := nativeFortiLogs(selected.Name)
-		if err != nil {
-			http.Error(response, err.Error(), 500)
-			return
-		}
-		response.Header().Set("Content-Type", "text/plain; charset=utf-8")
-		_, _ = response.Write(output)
-		return
-	}
-	path := "/logs/" + selected.Name + ".log"
-	output, err := dockerCommand("exec", containerName(selected.Name), "tail", "-n", "300", path).CombinedOutput()
+	output, err := nativeFortiLogs(selected.Name)
 	if err != nil {
-		output, err = dockerCommand("logs", "--tail", "300", containerName(selected.Name)).CombinedOutput()
-		if err != nil {
-			http.Error(response, strings.TrimSpace(string(output)), 500)
-			return
-		}
+		http.Error(response, err.Error(), 500)
+		return
 	}
 	response.Header().Set("Content-Type", "text/plain; charset=utf-8")
 	_, _ = response.Write(output)
@@ -1731,33 +1438,8 @@ func containerName(name string) string {
 	}
 	return "vpntoris-" + name
 }
-func containerRunning(name string) bool {
-	out, err := dockerCommand("inspect", "-f", "{{.State.Running}}", name).Output()
-	return err == nil && strings.TrimSpace(string(out)) == "true"
-}
-func containerHealthy(name string) bool {
-	out, err := dockerCommand("inspect", "-f", "{{if .State.Health}}{{.State.Health.Status}}{{else}}{{.State.Status}}{{end}}", name).Output()
-	return err == nil && strings.TrimSpace(string(out)) == "healthy"
-}
 func profileConnected(config VPNConfig) bool {
-	if nativeFortiSupported(config) || nativeOpenVPNSupported(config) || nativeOpenConnectSupported(config) || nativeIPSecSupported(config) {
-		return nativeFortiConnected(config.Name)
-	}
-	return containerHealthy(containerName(config.Name))
-}
-func waitForContainerHealthy(name string, timeout time.Duration) error {
-	deadline := time.Now().Add(timeout)
-	for time.Now().Before(deadline) {
-		if containerHealthy(name) {
-			return nil
-		}
-		if !containerRunning(name) {
-			logs, _ := dockerCommand("logs", "--tail", "40", name).CombinedOutput()
-			return fmt.Errorf("VPN tunnel failed: %s", strings.TrimSpace(string(logs)))
-		}
-		time.Sleep(time.Second)
-	}
-	return fmt.Errorf("VPN tunnel did not become ready before timeout")
+	return nativeFortiConnected(config.Name)
 }
 func gatewayStatePath() string {
 	return filepath.Join(filepath.Dir(configPath), "gateway-state.json")
@@ -1811,9 +1493,6 @@ func gatewayCandidates(config VPNConfig) []string {
 	}
 	return gateways
 }
-func validGateway(value string) bool {
-	return regexp.MustCompile(`^[A-Za-z0-9._-]+$`).MatchString(value)
-}
 func activeGateway(config VPNConfig) string {
 	gateways := gatewayCandidates(config)
 	if len(gateways) == 0 {
@@ -1829,48 +1508,6 @@ func activeGateway(config VPNConfig) string {
 		}
 	}
 	return gateways[0]
-}
-func setGatewayResult(config VPNConfig, gateway string, succeeded bool, rotate bool) string {
-	gateways := gatewayCandidates(config)
-	if len(gateways) == 0 {
-		return ""
-	}
-	gatewayState.Lock()
-	defer gatewayState.Unlock()
-	loadGatewayStateLocked()
-	record := gatewayState.items[config.Name]
-	record.Active = gateway
-	if succeeded {
-		record.Failures = 0
-	} else {
-		record.Failures++
-	}
-	limit := config.FailoverLimit
-	if limit < 1 {
-		limit = 2
-	}
-	if rotate || record.Failures >= limit {
-		for index, candidate := range gateways {
-			if candidate == gateway {
-				record.Active = gateways[(index+1)%len(gateways)]
-				break
-			}
-		}
-		record.Failures = 0
-	}
-	gatewayState.items[config.Name] = record
-	saveGatewayStateLocked()
-	return record.Active
-}
-func orderedGateways(config VPNConfig) []string {
-	gateways := gatewayCandidates(config)
-	active := activeGateway(config)
-	for index, gateway := range gateways {
-		if gateway == active {
-			return append(append([]string{}, gateways[index:]...), gateways[:index]...)
-		}
-	}
-	return gateways
 }
 func connectVPNWithFailover(config VPNConfig, exhaustive bool) error {
 	if nativeFortiSupported(config) {
@@ -1913,111 +1550,8 @@ func connectVPNWithFailover(config VPNConfig, exhaustive bool) error {
 		setRouteStatus(config.Name, "ready")
 		return nil
 	}
-	gateways := orderedGateways(config)
-	if len(gateways) == 0 {
-		return fmt.Errorf("at least one VPN gateway is required")
-	}
-	if !exhaustive {
-		gateways = gateways[:1]
-	}
-	errors := make([]string, 0, len(gateways))
-	for _, gateway := range gateways {
-		if !validGateway(gateway) {
-			return fmt.Errorf("invalid VPN gateway: %s", gateway)
-		}
-		attempt := config
-		attempt.Host = gateway
-		err := connectVPN(attempt)
-		if err == nil {
-			setRouteStatus(config.Name, "waiting")
-			time.Sleep(3 * time.Second)
-			if !containerHealthy(containerName(config.Name)) {
-				setRouteStatus(config.Name, "")
-				return fmt.Errorf("VPN connection was cancelled before routes were added")
-			}
-			setRouteStatus(config.Name, "adding")
-			port, portErr := proxyPort(containerName(config.Name))
-			if portErr == nil {
-				portErr = activateProfileRoutes(attempt, port)
-			}
-			if portErr == nil {
-				setGatewayResult(config, gateway, true, false)
-				setRouteStatus(config.Name, "ready")
-				return nil
-			}
-			setRouteStatus(config.Name, "failed")
-			err = portErr
-		}
-		errors = append(errors, gateway+": "+err.Error())
-		setGatewayResult(config, gateway, false, exhaustive)
-	}
 	setRouteStatus(config.Name, "failed")
-	return fmt.Errorf("all VPN gateway attempts failed: %s", strings.Join(errors, " | "))
-}
-func connectVPN(config VPNConfig, otp ...string) error {
-	if strings.TrimSpace(config.Name) == "" || strings.TrimSpace(config.Type) == "" {
-		return fmt.Errorf("profile name and VPN type are required")
-	}
-	name := containerName(config.Name)
-	_ = dockerCommand("rm", "-f", name).Run()
-	profileDir := filepath.Join(filepath.Dir(configPath), "profiles", strings.TrimPrefix(name, "vpntoris-"))
-	if err := os.MkdirAll(profileDir, 0700); err != nil {
-		return fmt.Errorf("could not create profile directory: %w", err)
-	}
-	args := []string{
-		"run", "-d", "--name", name,
-		"--cap-add=NET_ADMIN", "--device=/dev/net/tun",
-		"--label", "vpntoris=true", "--label", "vpntoris.profile=" + config.Name,
-		"-p", "127.0.0.1::1080",
-		"-p", "127.0.0.1::53/udp",
-		"-e", "VPN_TYPE=" + config.Type,
-		"-e", "VPN_NAME=" + config.Name,
-		"-e", "VPN_HOST=" + config.Host,
-		"-e", "VPN_PORT=" + config.Port,
-		"-e", "VPN_USER=" + config.User,
-		"-e", "VPN_PASS=" + config.Password,
-		"-e", fmt.Sprintf("VPN_2FA=%t", config.TwoFactor),
-		"-e", "VPN_DNS_SERVERS=" + config.DNSServers,
-	}
-	if config.Type == "openfortivpn" {
-		args = append(args, "--cap-add=MKNOD", "--device-cgroup-rule=c 108:0 rwm")
-	}
-	if config.Type == "ipsec" {
-		if config.IPSec == nil {
-			return fmt.Errorf("IPsec advanced settings are required")
-		}
-		swanConfig, err := renderSwanctlConfig(config)
-		if err != nil {
-			return err
-		}
-		configFile := filepath.Join(profileDir, "swanctl.conf")
-		if err := os.WriteFile(configFile, []byte(swanConfig), 0600); err != nil {
-			return fmt.Errorf("could not save IPsec configuration: %w", err)
-		}
-		args = append(args, "--cap-add=SYS_ADMIN", "--sysctl", "net.ipv4.ip_forward=1",
-			"-v", configFile+":/etc/swanctl/swanctl.conf:ro")
-	}
-	if config.Type == "openvpn" {
-		if strings.TrimSpace(config.Config) == "" {
-			return fmt.Errorf("OpenVPN configuration is required")
-		}
-		configFile := filepath.Join(profileDir, "config.conf")
-		openVPNConfig := overrideOpenVPNRemote(config.Config, config.Host, config.Port)
-		if err := os.WriteFile(configFile, []byte(openVPNConfig), 0600); err != nil {
-			return fmt.Errorf("could not save OpenVPN configuration: %w", err)
-		}
-		args = append(args, "-v", configFile+":/vpn/config.conf:ro", "-e", "VPN_CONFIG=/vpn/config.conf")
-	}
-	args = append(args, imageName)
-	output, err := dockerCommand(args...).CombinedOutput()
-	if err != nil {
-		return fmt.Errorf("could not start VPN: %s", strings.TrimSpace(string(output)))
-	}
-	timeout := 45 * time.Second
-	if config.TwoFactor {
-		timeout = 190 * time.Second
-	}
-	return waitForContainerHealthy(name, timeout)
+	return fmt.Errorf("native VPN engine is unavailable for this profile (helper not running or unsupported platform)")
 }
 func overrideOpenVPNRemote(configuration, gateway, port string) string {
 	lines := strings.Split(configuration, "\n")
@@ -2053,12 +1587,7 @@ func sendOTP(config VPNConfig, otp string) error {
 	if nativeFortiSupported(config) || nativeOpenVPNSupported(config) || nativeOpenConnectSupported(config) || nativeIPSecSupported(config) {
 		return nativeFortiOTP(config.Name, otp)
 	}
-	command := dockerCommand("exec", "-i", containerName(config.Name), "/bin/bash", "-c", "cat > /run/vpntoris/otp")
-	command.Stdin = strings.NewReader(otp + "\n")
-	if output, err := command.CombinedOutput(); err != nil {
-		return fmt.Errorf("could not submit OTP: %s", strings.TrimSpace(string(output)))
-	}
-	return nil
+	return fmt.Errorf("native VPN engine is unavailable for this profile (helper not running or unsupported platform)")
 }
 
 var proposalToken = regexp.MustCompile(`^[a-zA-Z0-9_-]+$`)
@@ -2289,11 +1818,4 @@ secrets {
 `, ip.IKEVersion, config.Host, ikeProposals, ip.IKELifetime, ip.DPDDelay, ip.DPDTimeout,
 		fragmentation, ip.MOBIKE, ip.ForceEncap, aggressive, vips, authSections,
 		localTS, remoteTS, espProposals, ip.ChildLifetime, rekeyBytes, ip.ReplayWindow, dpdAction, secretSections), nil
-}
-func disconnectVPN(name string) error {
-	output, err := dockerCommand("rm", "-f", name).CombinedOutput()
-	if err != nil {
-		return fmt.Errorf("could not stop VPN: %s", strings.TrimSpace(string(output)))
-	}
-	return nil
 }

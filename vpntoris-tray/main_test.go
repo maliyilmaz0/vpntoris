@@ -94,7 +94,7 @@ func TestSanitizeDiagnosticText(t *testing.T) {
 		t.Fatalf("unrelated diagnostic content was removed: %s", output)
 	}
 }
-func TestGatewayFailoverState(t *testing.T) {
+func TestGatewayCandidates(t *testing.T) {
 	previousPath := configPath
 	configPath = t.TempDir() + "/configs.json"
 	defer func() { configPath = previousPath }()
@@ -107,14 +107,8 @@ func TestGatewayFailoverState(t *testing.T) {
 	if strings.Join(gateways, ",") != "vpn-a.example.com,vpn-b.example.com,vpn-c.example.com" {
 		t.Fatalf("unexpected gateway list: %v", gateways)
 	}
-	if next := setGatewayResult(profile, gateways[0], false, false); next != gateways[0] {
-		t.Fatalf("gateway rotated before threshold: %s", next)
-	}
-	if next := setGatewayResult(profile, gateways[0], false, false); next != gateways[1] {
-		t.Fatalf("gateway did not rotate at threshold: %s", next)
-	}
-	if got := orderedGateways(profile); strings.Join(got, ",") != "vpn-b.example.com,vpn-c.example.com,vpn-a.example.com" {
-		t.Fatalf("unexpected persisted gateway order: %v", got)
+	if active := activeGateway(profile); active != gateways[0] {
+		t.Fatalf("unexpected default gateway: %s", active)
 	}
 }
 func TestOverrideOpenVPNRemote(t *testing.T) {
@@ -125,18 +119,5 @@ func TestOverrideOpenVPNRemote(t *testing.T) {
 	}
 	if !strings.Contains(result, "auth-user-pass") {
 		t.Fatalf("OpenVPN configuration content was lost: %s", result)
-	}
-}
-func TestDockerCommandIncludesCredentialHelper(t *testing.T) {
-	command := dockerCommand("version")
-	path := ""
-	for _, value := range command.Env {
-		if strings.HasPrefix(value, "PATH=") {
-			path = strings.TrimPrefix(value, "PATH=")
-			break
-		}
-	}
-	if !strings.Contains(path, "/Applications/Docker.app/Contents/Resources/bin") {
-		t.Fatalf("Docker credential helper directory missing from PATH: %s", path)
 	}
 }

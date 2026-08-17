@@ -81,11 +81,6 @@ struct ProfileStatus: Codable, Identifiable {
 
 struct ActiveRoute: Codable, Identifiable { var id: String { profile + cidr }; let profile: String; let cidr: String; let port: String }
 
-struct DockerStatus: Codable {
-    let state: String
-    let message: String
-}
-
 struct TrafficStatus: Codable, Identifiable {
     var id: String { name }
     let name: String
@@ -310,7 +305,6 @@ enum ProfileKeychain {
     @Published var profiles: [ProfileStatus] = []
     @Published var error = ""
     @Published var busy: Set<String> = []
-    @Published var docker = DockerStatus(state: "checking", message: "Checking Docker…")
     @Published var traffic: [String: TrafficStatus] = [:]
     @Published var trafficHistory: [String: [Double]] = [:]
     private let api = URL(string: "http://127.0.0.1:17984")!
@@ -348,19 +342,6 @@ enum ProfileKeychain {
 
     private func notifyGatewayChange(_ profile: String, gateway: String) {
         AppNotifications.send("gateway", title: "VPN gateway changed", body: "\(profile) will use \(gateway)", id: "vpntoris-gateway-\(profile)-\(gateway)")
-    }
-
-    func refreshDocker(retry: Bool = false) async {
-        do {
-            let previousState = docker.state
-            var request = URLRequest(url: api.appending(path: "api/docker"))
-            if retry { request.httpMethod = "POST" }
-            let (data, _) = try await URLSession.shared.data(for: request)
-            docker = try JSONDecoder().decode(DockerStatus.self, from: data)
-            if previousState == "ready" && docker.state != "ready" { AppNotifications.send("docker", title: "Docker unavailable", body: docker.message, id: "vpntoris-docker-\(docker.state)") }
-        } catch {
-            docker = DockerStatus(state: "error", message: error.localizedDescription)
-        }
     }
 
     func refreshTraffic() async {
@@ -815,26 +796,6 @@ struct ContentView: View {
             .padding(.horizontal, 18)
             .padding(.bottom, 10)
             Divider()
-            if requiresDocker && store.docker.state != "ready" {
-                HStack(spacing: 10) {
-                    if store.docker.state == "checking" || store.docker.state == "building" { ProgressView().controlSize(.small) }
-                    else { Image(systemName: store.docker.state == "missing" ? "shippingbox" : "exclamationmark.triangle.fill").foregroundStyle(.orange) }
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text(dockerTitle).font(.callout.bold())
-                        Text(store.docker.message).font(.caption).foregroundStyle(.secondary).lineLimit(3)
-                    }
-                    Spacer()
-                    if store.docker.state == "stopped" {
-                        Button("Open Docker") { NSWorkspace.shared.open(URL(fileURLWithPath: "/Applications/Docker.app")) }.buttonStyle(.borderedProminent)
-                    }
-                    if store.docker.state == "missing" {
-                        Button("Download") { NSWorkspace.shared.open(URL(string: "https://www.docker.com/products/docker-desktop/")!) }.buttonStyle(.borderedProminent)
-                    }
-                    if store.docker.state == "stopped" || store.docker.state == "error" {
-                        Button("Retry") { Task { await store.refreshDocker(retry: true) } }.buttonStyle(.bordered)
-                    }
-                }.padding(10).background(.orange.opacity(0.12))
-            }
             if !store.error.isEmpty { Text(store.error).font(.caption).foregroundStyle(.red).padding(10) }
             if filteredProfiles.isEmpty {
                 VStack(spacing: 8) {
@@ -913,18 +874,13 @@ struct ContentView: View {
                         }.padding(14).background(.thinMaterial, in: RoundedRectangle(cornerRadius: 14)).listRowInsets(EdgeInsets(top: 5, leading: 14, bottom: 5, trailing: 14)).listRowSeparator(.hidden).listRowBackground(Color.clear).swipeActions(edge: .trailing, allowsFullSwipe: false) { Button(role: .destructive) { deleting = profile } label: { Image(systemName: "trash.fill") }.tint(.red).accessibilityLabel("Delete") }
                 }
             }.listStyle(.plain).scrollContentBackground(.hidden).padding(.horizontal, 7).animation(.easeInOut(duration: 0.25), value: filteredProfiles.map(\.name))
-            Divider(); HStack { Circle().fill(!requiresDocker || store.docker.state == "ready" ? Color.green : Color.orange).frame(width: 7); Text(requiresDocker ? (store.docker.state == "ready" ? "Docker ready" : "Docker unavailable") : "Native engine ready").font(.caption).foregroundStyle(.secondary); Text("v\(updater.currentVersion)").font(.caption.monospacedDigit()).foregroundStyle(.tertiary).help("VPNToris version \(updater.currentVersion)"); Spacer(); Button("Touch ID") { showTouchIDHelp = true }.buttonStyle(.borderless); Button("Quit") { NSApplication.shared.terminate(nil) }.buttonStyle(.borderless) }.padding(12)
+            Divider(); HStack { Circle().fill(Color.green).frame(width: 7); Text("Native engine ready").font(.caption).foregroundStyle(.secondary); Text("v\(updater.currentVersion)").font(.caption.monospacedDigit()).foregroundStyle(.tertiary).help("VPNToris version \(updater.currentVersion)"); Spacer(); Button("Touch ID") { showTouchIDHelp = true }.buttonStyle(.borderless); Button("Quit") { NSApplication.shared.terminate(nil) }.buttonStyle(.borderless) }.padding(12)
         }.frame(width: 410, height: 600).task {
             store.migrateLegacyCredentials()
             discoveredProfiles = discoverInstalledProfiles()
             await store.refresh()
             await store.connectLaunchProfiles()
-            if requiresDocker { await store.refreshDocker(retry: true) }
             await updater.check(silent: true)
-            while requiresDocker && (store.docker.state == "checking" || store.docker.state == "building") {
-                try? await Task.sleep(for: .seconds(2))
-                await store.refreshDocker()
-            }
             while !Task.isCancelled {
                 await store.refreshTraffic()
                 await store.refresh()
@@ -967,18 +923,6 @@ struct ContentView: View {
         }
         .onDrop(of: [UTType.fileURL.identifier], isTargeted: $profileDropActive) { importDroppedProfiles($0) }
     }
-
-    private var dockerTitle: String {
-        switch store.docker.state {
-        case "missing": return "Docker Desktop is required"
-        case "stopped": return "Docker Desktop is not running"
-        case "building": return "Preparing VPN engine"
-        case "error": return "Docker setup failed"
-        default: return "Checking Docker"
-        }
-    }
-
-    private var requiresDocker: Bool { false }
 
     private func profileTypeName(_ type: String, protocol value: String = "") -> String { switch type { case "openfortivpn": return "FortiGate SSL VPN"; case "ipsec": return "FortiGate IPsec"; case "openconnect": return ["anyconnect": "Cisco AnyConnect", "gp": "Palo Alto GlobalProtect", "pulse": "Pulse / Ivanti", "nc": "Juniper Network Connect", "f5": "F5 BIG-IP", "fortinet": "Fortinet SSL VPN", "array": "Array Networks"][value] ?? "OpenConnect"; case "openvpn": return "OpenVPN"; default: return "VPN" } }
     private func profileTypeIcon(_ type: String) -> String { switch type { case "ipsec": return "lock.shield.fill"; case "openconnect": return "network.badge.shield.half.filled"; case "openvpn": return "point.3.connected.trianglepath.dotted"; default: return "shield.lefthalf.filled" } }
@@ -1261,7 +1205,6 @@ struct NotificationSettingsView: View {
     @AppStorage("notifications.reconnect") private var reconnect = true
     @AppStorage("notifications.gateway") private var gateway = true
     @AppStorage("notifications.otp") private var otp = true
-    @AppStorage("notifications.docker") private var docker = true
     @AppStorage("notifications.routeConflict") private var routeConflict = true
     @AppStorage("notifications.update") private var update = true
     @AppStorage("notifications.sound") private var sound = true
@@ -1272,7 +1215,7 @@ struct NotificationSettingsView: View {
         VStack(alignment: .leading, spacing: 14) {
             HStack { Text("Notifications").font(.title2.bold()); Spacer(); Button("System Settings") { if let url = URL(string: "x-apple.systempreferences:com.apple.Notifications-Settings.extension") { NSWorkspace.shared.open(url) } }; Button("Done") { dismiss() } }
             GroupBox("VPN Events") { VStack(alignment: .leading, spacing: 9) { Toggle("Connected", isOn: $connect); Toggle("Disconnected", isOn: $disconnect); Toggle("Reconnected", isOn: $reconnect); Toggle("Gateway failover", isOn: $gateway); Toggle("OTP required", isOn: $otp) }.frame(maxWidth: .infinity, alignment: .leading) }
-            GroupBox("System Events") { VStack(alignment: .leading, spacing: 9) { Toggle("Docker failure", isOn: $docker); Toggle("Route conflict", isOn: $routeConflict); Toggle("Update available", isOn: $update) }.frame(maxWidth: .infinity, alignment: .leading) }
+            GroupBox("System Events") { VStack(alignment: .leading, spacing: 9) { Toggle("Route conflict", isOn: $routeConflict); Toggle("Update available", isOn: $update) }.frame(maxWidth: .infinity, alignment: .leading) }
             Toggle("Notification sounds", isOn: $sound)
             GroupBox("Quiet Hours") { VStack(alignment: .leading, spacing: 8) { Toggle("Mute sounds during quiet hours", isOn: $quietEnabled); HStack { Stepper("Start: \(quietStart):00", value: $quietStart, in: 0...23); Stepper("End: \(quietEnd):00", value: $quietEnd, in: 0...23) }.disabled(!quietEnabled); Text("Notifications remain visible; only their sound is muted.").font(.caption).foregroundStyle(.secondary) }.frame(maxWidth: .infinity, alignment: .leading) }
         }.padding(22).frame(width: 520)

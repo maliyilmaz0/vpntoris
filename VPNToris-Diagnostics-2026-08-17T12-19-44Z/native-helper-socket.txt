@@ -1,0 +1,4 @@
+drwx------ root:daemon /var/run/vpntoris-native
+stat: /var/run/vpntoris-native/helper.sock: stat: Permission denied
+
+exit status 1

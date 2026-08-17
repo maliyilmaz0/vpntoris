@@ -13,8 +13,7 @@
 "Backup and Restore…" = "Yedekle ve Geri Yükle…";
 "Export Diagnostics…" = "Tanılama Paketi Oluştur…";
 "Check for Updates…" = "Güncellemeleri Denetle…";
-"Docker ready" = "Docker hazır";
-"Docker unavailable" = "Docker kullanılamıyor";
+"Native engine ready" = "Yerel motor hazır";
 "Touch ID" = "Touch ID";
 "Quit" = "Çıkış";
 "Connect" = "Bağlan";
@@ -79,7 +78,6 @@
 "Reconnected" = "Yeniden bağlandı";
 "Gateway failover" = "Gateway geçişi";
 "OTP required" = "OTP gerekli";
-"Docker failure" = "Docker hatası";
 "Route conflict" = "Rota çakışması";
 "Update available" = "Güncelleme mevcut";
 "Notification sounds" = "Bildirim sesleri";

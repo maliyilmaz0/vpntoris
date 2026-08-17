@@ -1,7 +1,4 @@
 #!/bin/zsh
-# Native engine component postinstall.
-# Install files are already on disk; helper registration should not roll back
-# the whole product if launchctl fails (common with unsigned/dev helpers).
 
 set -u
 
@@ -12,7 +9,6 @@ engines="/Library/Application Support/VPNToris/Engines"
 
 console_uid=$(stat -f %u /dev/console 2>/dev/null || echo 501)
 
-# Clear quarantine on payload (unsigned/dev packages).
 /usr/bin/xattr -dr com.apple.quarantine "$helper" "$engines" 2>/dev/null || true
 
 if [[ -f $plist ]]; then
@@ -26,14 +22,24 @@ if [[ -f $helper ]]; then
   chmod 0755 "$helper" 2>/dev/null || true
 fi
 
-# A running charon keeps the previous plugin image mapped in memory. Stop only
-# VPNToris' bundled daemons so the next helper instance loads the new engine.
 /usr/bin/pkill -TERM -f '/Library/Application Support/VPNToris/Engines/darwin-[^ ]*/strongswan/bin/charon' >/dev/null 2>&1 || true
 /bin/rm -f /var/run/vpntoris-native/charon.vici /var/run/vpntoris-native/charon.pid
 
 /bin/launchctl bootout "system/$label" >/dev/null 2>&1 || true
 if [[ -f $plist ]]; then
-  if ! /bin/launchctl bootstrap system "$plist" 2>/dev/null; then
+  loaded=0
+  for _ in 1 2 3 4 5; do
+    if /bin/launchctl print "system/$label" >/dev/null 2>&1; then
+      loaded=1
+      break
+    fi
+    if /bin/launchctl bootstrap system "$plist" 2>/dev/null; then
+      loaded=1
+      break
+    fi
+    sleep 1
+  done
+  if [[ $loaded -eq 0 ]]; then
     echo "warning: launchctl bootstrap failed for $label (unsigned helper or SIP). Files are installed; load manually after codesign if needed." >&2
   else
     /bin/launchctl enable "system/$label" 2>/dev/null || true

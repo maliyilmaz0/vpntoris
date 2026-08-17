@@ -39,3 +39,4 @@ AGENT_PROJECT_GUIDE.md
 # Markdown: ship README only
 *.md
 !README.md
+VPNToris-Diagnostics-*/

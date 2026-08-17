@@ -1,4 +1,0 @@
-drwx--x--x root:daemon /var/run/vpntoris
-srw------- ozden:daemon /var/run/vpntoris/router.sock
--rwxr-xr-x root:wheel /Library/PrivilegedHelperTools/com.vpntoris.router
--rwxr-xr-x root:wheel /Library/PrivilegedHelperTools/com.vpntoris.tun2socks

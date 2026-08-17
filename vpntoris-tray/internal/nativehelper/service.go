@@ -111,7 +111,10 @@ func (service *Service) PrepareRuntime() error {
 	if err := os.MkdirAll(service.paths.LogDirectory, 0751); err != nil {
 		return err
 	}
-	if err := os.MkdirAll(service.paths.RuntimeDirectory, 0700); err != nil {
+	if err := os.MkdirAll(service.paths.RuntimeDirectory, 0755); err != nil {
+		return err
+	}
+	if err := os.Chmod(service.paths.RuntimeDirectory, 0755); err != nil {
 		return err
 	}
 	if service.paths.StateDirectory != "" {

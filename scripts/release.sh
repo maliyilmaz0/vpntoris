@@ -70,7 +70,7 @@ for TARGET_ARCH in "${ARCHES[@]}"; do
     if [[ "$TARGET_ARCH" == "x86_64" ]]; then GO_ARCH=amd64; fi
     (
         cd "$ROOT_DIR/vpntoris-tray"
-        CGO_ENABLED=0 GOARCH="$GO_ARCH" go build -trimpath -ldflags "-s -w" -o "$BUILD_DIR/vpntorisd-$TARGET_ARCH" .
+        CGO_ENABLED=0 GOARCH="$GO_ARCH" go build -trimpath -ldflags "-s -w -X main.version=$VERSION" -o "$BUILD_DIR/vpntorisd-$TARGET_ARCH" .
         CGO_ENABLED=0 GOARCH="$GO_ARCH" go build -trimpath -ldflags "-s -w" -o "$BUILD_DIR/vpntoris-route-helper-$TARGET_ARCH" ./routerhelper
         CGO_ENABLED=0 GOARCH="$GO_ARCH" go build -trimpath -ldflags "-s -w" -o "$BUILD_DIR/vpntorisctl-$TARGET_ARCH" ./cli
     )

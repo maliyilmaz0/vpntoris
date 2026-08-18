@@ -61,6 +61,7 @@ type session struct {
 	challengeState string
 	received       uint64
 	sent           uint64
+	certAccepts    int
 	startedAt      time.Time
 	transaction    *nativeengine.Transaction
 }
@@ -261,6 +262,9 @@ func (service *Service) Start(request fortihelper.Request) fortihelper.Response 
 			"--script=" + scriptPath,
 			"--timestamp",
 			"--server=" + "https://" + net.JoinHostPort(request.Host, strconv.Itoa(request.Port)),
+		}
+		if pin, pinErr := serverCertificatePin(request.Host, request.Port); pinErr == nil {
+			arguments = append(arguments, "--servercert="+pin)
 		}
 		if request.Username != "" {
 			arguments = append(arguments, "--user="+request.Username)
@@ -522,6 +526,21 @@ func (service *Service) fail(current *session, message string) {
 	service.stopLocked(current)
 	current.state = "failed"
 }
+func (service *Service) acceptCertificates(current *session) {
+	data, err := os.ReadFile(current.logPath)
+	if err != nil {
+		return
+	}
+	prompts := strings.Count(string(data), "Enter 'yes' to accept")
+	service.mu.Lock()
+	defer service.mu.Unlock()
+	for current.certAccepts < prompts && current.input != nil {
+		if _, err := current.input.Write([]byte("yes\n")); err != nil {
+			return
+		}
+		current.certAccepts++
+	}
+}
 func (service *Service) monitor(current *session) {
 	wait := make(chan error, 1)
 	go func() { wait <- current.command.Wait() }()
@@ -543,6 +562,9 @@ func (service *Service) monitor(current *session) {
 			go service.finish(current, <-wait)
 			return
 		case <-ticker.C:
+			if current.request.Protocol == fortihelper.ProtocolOpenConnect {
+				service.acceptCertificates(current)
+			}
 			interfaceName := interfaceFromLog(current.logPath, current.request.Protocol)
 			if interfaceName == "" {
 				continue

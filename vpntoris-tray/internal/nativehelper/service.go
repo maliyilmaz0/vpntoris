@@ -62,6 +62,7 @@ type session struct {
 	received       uint64
 	sent           uint64
 	certAccepts    int
+	pendingInput   []string
 	startedAt      time.Time
 	transaction    *nativeengine.Transaction
 }
@@ -263,9 +264,6 @@ func (service *Service) Start(request fortihelper.Request) fortihelper.Response 
 			"--timestamp",
 			"--server=" + "https://" + net.JoinHostPort(request.Host, strconv.Itoa(request.Port)),
 		}
-		if pin, pinErr := serverCertificatePin(request.Host, request.Port); pinErr == nil {
-			arguments = append(arguments, "--servercert="+pin)
-		}
 		if request.Username != "" {
 			arguments = append(arguments, "--user="+request.Username)
 		}
@@ -314,7 +312,15 @@ func (service *Service) Start(request fortihelper.Request) fortihelper.Response 
 	current.request.OTP = ""
 	current.request.Configuration = ""
 	service.sessions[request.Profile] = current
-	if protocol != fortihelper.ProtocolOpenVPN && request.Password != "" {
+	if protocol == fortihelper.ProtocolOpenConnect {
+		if request.Password != "" {
+			current.pendingInput = append(current.pendingInput, request.Password+"\n")
+		}
+		if request.OTP != "" {
+			current.pendingInput = append(current.pendingInput, request.OTP+"\n")
+		}
+	}
+	if protocol != fortihelper.ProtocolOpenVPN && protocol != fortihelper.ProtocolOpenConnect && request.Password != "" {
 		credential := request.Password + "\n"
 		if _, err := current.input.Write([]byte(credential)); err != nil {
 			service.stopLocked(current)
@@ -329,7 +335,7 @@ func (service *Service) Start(request fortihelper.Request) fortihelper.Response 
 	if protocol == fortihelper.ProtocolOpenConnect && request.TwoFactor {
 		current.state = "waiting-otp"
 	}
-	if request.OTP != "" {
+	if protocol != fortihelper.ProtocolOpenConnect && request.OTP != "" {
 		if _, err := current.input.Write([]byte(request.OTP + "\n")); err != nil {
 			service.stopLocked(current)
 			return fortihelper.Response{State: "failed", Error: "could not supply one-time password"}
@@ -374,6 +380,11 @@ func (service *Service) SendOTP(request fortihelper.Request) fortihelper.Respons
 		if writeErr != nil {
 			return fortihelper.Response{State: "failed", Error: "could not submit the native IPsec OTP"}
 		}
+		current.state = "connecting"
+		return fortihelper.Response{State: current.state}
+	}
+	if len(current.pendingInput) > 0 {
+		current.pendingInput = append(current.pendingInput, request.OTP+"\n")
 		current.state = "connecting"
 		return fortihelper.Response{State: current.state}
 	}
@@ -541,6 +552,26 @@ func (service *Service) acceptCertificates(current *session) {
 		current.certAccepts++
 	}
 }
+func (service *Service) flushPendingInput(current *session) {
+	if !logContains(current.logPath, "Enter login credentials") {
+		return
+	}
+	service.mu.Lock()
+	defer service.mu.Unlock()
+	if len(current.pendingInput) == 0 {
+		return
+	}
+	if current.input == nil {
+		current.pendingInput = nil
+		return
+	}
+	for _, line := range current.pendingInput {
+		if _, err := current.input.Write([]byte(line)); err != nil {
+			return
+		}
+	}
+	current.pendingInput = nil
+}
 func (service *Service) monitor(current *session) {
 	wait := make(chan error, 1)
 	go func() { wait <- current.command.Wait() }()
@@ -564,6 +595,7 @@ func (service *Service) monitor(current *session) {
 		case <-ticker.C:
 			if current.request.Protocol == fortihelper.ProtocolOpenConnect {
 				service.acceptCertificates(current)
+				service.flushPendingInput(current)
 			}
 			interfaceName := interfaceFromLog(current.logPath, current.request.Protocol)
 			if interfaceName == "" {

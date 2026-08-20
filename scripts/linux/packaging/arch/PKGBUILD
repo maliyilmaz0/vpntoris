@@ -1,0 +1,66 @@
+# Maintainer: VPNToris <info@vpntoris.local>
+pkgname=vpntoris
+pkgver=2.1.0
+pkgrel=1
+pkgdesc="Multi-profile split-route corporate VPN client for macOS, Linux and Windows"
+arch=('x86_64' 'aarch64')
+url="https://github.com/maliyilmaz0/vpntoris"
+license=('GPL-3.0-or-later')
+depends=('systemd' 'iproute2' 'ppp' 'openvpn' 'openfortivpn' 'openconnect' 'python-gobject' 'gtk3' 'libsecret')
+optdepends=(
+  'strongswan: for IPsec (IKEv1/IKEv2) connections'
+  'kdialog: for KDE Plasma GUI dialogs'
+  'zenity: for GNOME/XFCE GUI dialogs'
+)
+makedepends=('go' 'git')
+options=('!strip')
+
+build() {
+  cd "$srcdir/vpntoris/vpntoris-tray"
+  export CGO_ENABLED=0
+  go build -trimpath -ldflags="-s -w -X main.version=${pkgver}" -o "$srcdir/vpntorisd" .
+  go build -trimpath -ldflags="-s -w" -o "$srcdir/vpntoris-native-helper" ./cmd/vpntoris-native-helper
+  go build -trimpath -ldflags="-s -w" -o "$srcdir/vpntoris-service" ./cmd/vpntoris-service
+  go build -trimpath -ldflags="-s -w" -o "$srcdir/vpntorisctl" ./cli
+  go build -trimpath -ldflags="-s -w" -o "$srcdir/vpntoris-tray" ./cmd/vpntoris-tray
+  go build -trimpath -ldflags="-s -w" -o "$srcdir/vpntoris-vpnc-script" ./cmd/vpntoris-vpnc-script
+  go build -trimpath -ldflags="-s -w" -o "$srcdir/vpntoris-browser-open" ./cmd/vpntoris-browser-open
+}
+
+package() {
+  local target_arch="amd64"
+  [[ "$CARCH" == "aarch64" ]] && target_arch="arm64"
+
+  install -d "$pkgdir/usr/lib/vpntoris"
+  install -d "$pkgdir/usr/bin"
+  install -d "$pkgdir/usr/lib/systemd/system"
+  install -d "$pkgdir/usr/lib/systemd/user"
+  install -d "$pkgdir/usr/share/applications"
+  install -d "$pkgdir/etc/xdg/autostart"
+  install -d "$pkgdir/var/lib/vpntoris/engines/linux-$target_arch"
+  install -d "$pkgdir/var/lib/vpntoris/state"
+  install -d "$pkgdir/var/log/vpntoris"
+
+  install -m755 "$srcdir/vpntorisd" "$pkgdir/usr/lib/vpntoris/"
+  install -m755 "$srcdir/vpntoris-native-helper" "$pkgdir/usr/lib/vpntoris/"
+  install -m755 "$srcdir/vpntoris-service" "$pkgdir/usr/lib/vpntoris/"
+  install -m755 "$srcdir/vpntorisctl" "$pkgdir/usr/bin/"
+  install -m755 "$srcdir/vpntoris-tray" "$pkgdir/usr/bin/"
+  install -m755 "$srcdir/vpntoris/vpntoris-tray/cmd/vpntoris-tray/gui_linux.py" "$pkgdir/usr/lib/vpntoris/vpntoris-gui"
+  install -m755 "$srcdir/vpntoris/scripts/linux/packaging/vpntoris-tray-autostart.sh" "$pkgdir/usr/lib/vpntoris/vpntoris-tray-autostart"
+
+  install -m644 "$srcdir/vpntoris/scripts/linux/packaging/vpntoris-native.service" "$pkgdir/usr/lib/systemd/system/"
+  install -m644 "$srcdir/vpntoris/scripts/linux/packaging/vpntorisd.user.service" "$pkgdir/usr/lib/systemd/user/vpntorisd.service"
+  install -m644 "$srcdir/vpntoris/scripts/linux/packaging/vpntoris-tray.desktop" "$pkgdir/usr/share/applications/"
+  install -m644 "$srcdir/vpntoris/scripts/linux/packaging/vpntoris-tray-autostart.desktop" "$pkgdir/etc/xdg/autostart/vpntoris-tray.desktop"
+
+  for size in 16 22 24 32 48 64 128 256; do
+    local icon="$srcdir/vpntoris/assets/icons/vpntoris-${size}.png"
+    if [[ -f "$icon" ]]; then
+      install -Dm644 "$icon" "$pkgdir/usr/share/icons/hicolor/${size}x${size}/apps/vpntoris.png"
+    fi
+  done
+  if [[ -f "$srcdir/vpntoris/assets/icons/vpntoris-128.png" ]]; then
+    install -Dm644 "$srcdir/vpntoris/assets/icons/vpntoris-128.png" "$pkgdir/usr/share/pixmaps/vpntoris.png"
+  fi
+}

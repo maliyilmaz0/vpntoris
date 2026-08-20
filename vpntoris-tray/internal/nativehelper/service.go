@@ -182,7 +182,7 @@ func (service *Service) Start(request fortihelper.Request) fortihelper.Response 
 		return fortihelper.Response{State: "failed", Error: err.Error()}
 	}
 	logPath := service.paths.ProfileLog(request.Profile)
-	logFile, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0640)
+	logFile, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0644)
 	if err != nil {
 		readInput.Close()
 		writeInput.Close()
@@ -323,7 +323,7 @@ func (service *Service) Start(request fortihelper.Request) fortihelper.Response 
 		current.input = nil
 		go service.manageOpenVPN(current)
 	}
-	if protocol == fortihelper.ProtocolOpenConnect && request.TwoFactor {
+	if (protocol == fortihelper.ProtocolOpenConnect || protocol == fortihelper.ProtocolFortiGateSSL) && request.TwoFactor {
 		current.state = "waiting-otp"
 	}
 	if request.OTP != "" {

@@ -4,8 +4,10 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"hash/fnv"
+	"log"
 	"net"
 	"os"
 	"os/exec"
@@ -159,11 +161,21 @@ func serve(uid int) error {
 	if err := os.Chmod(socketPath, 0600); err != nil {
 		return err
 	}
+	backoff := 5 * time.Millisecond
 	for {
 		connection, err := listener.Accept()
 		if err != nil {
+			if errors.Is(err, net.ErrClosed) {
+				return nil
+			}
+			log.Printf("router: accept failed: %v", err)
+			time.Sleep(backoff)
+			if backoff < time.Second {
+				backoff *= 2
+			}
 			continue
 		}
+		backoff = 5 * time.Millisecond
 		go func() {
 			defer connection.Close()
 			var req request

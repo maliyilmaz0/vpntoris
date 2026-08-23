@@ -287,13 +287,17 @@ enum ProfileKeychain {
         guard SecItemCopyMatching(query as CFDictionary, &result) == errSecSuccess, let data = result as? Data else { return "" }
         return String(data: data, encoding: .utf8) ?? ""
     }
-    static func write(_ value: String, profile: String, field: String) {
+    @discardableResult
+    static func write(_ value: String, profile: String, field: String) -> Bool {
         let base: [String: Any] = [kSecClass as String: kSecClassGenericPassword, kSecAttrService as String: service, kSecAttrAccount as String: "\(profile).\(field)"]
-        if value.isEmpty { SecItemDelete(base as CFDictionary); return }
+        if value.isEmpty { let status = SecItemDelete(base as CFDictionary); return status == errSecSuccess || status == errSecItemNotFound }
         let data = Data(value.utf8)
-        if SecItemUpdate(base as CFDictionary, [kSecValueData as String: data] as CFDictionary) == errSecItemNotFound {
-            var item = base; item[kSecValueData as String] = data; SecItemAdd(item as CFDictionary, nil)
+        let updated = SecItemUpdate(base as CFDictionary, [kSecValueData as String: data] as CFDictionary)
+        if updated == errSecSuccess { return true }
+        if updated == errSecItemNotFound {
+            var item = base; item[kSecValueData as String] = data; return SecItemAdd(item as CFDictionary, nil) == errSecSuccess
         }
+        return false
     }
     static func delete(profile: String) {
         write("", profile: profile, field: "password")
@@ -414,7 +418,18 @@ enum ProfileKeychain {
         configs.append(persisted)
         let url = try configURL()
         try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
-        try JSONEncoder.pretty.encode(configs).write(to: url, options: .atomic)
+        try writeConfigs(configs, to: url)
+    }
+
+    private func writeConfigs(_ configs: [VPNProfile], to url: URL) throws {
+        let data = try JSONEncoder.pretty.encode(configs)
+        let temporary = url.deletingLastPathComponent().appending(path: "configs.json.tmp")
+        try? FileManager.default.removeItem(at: temporary)
+        guard FileManager.default.createFile(atPath: temporary.path, contents: data, attributes: [.posixPermissions: 0o600]) else {
+            throw NSError(domain: "VPNToris", code: 2, userInfo: [NSLocalizedDescriptionKey: "Could not stage configs.json"])
+        }
+        try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: temporary.path)
+        _ = try FileManager.default.replaceItemAt(url, withItemAt: temporary)
     }
 
     private func loadConfigs() -> [VPNProfile] {
@@ -439,21 +454,59 @@ enum ProfileKeychain {
     }
 
     func migrateLegacyCredentials() {
-        guard let url = try? configURL(), let data = try? Data(contentsOf: url), var configs = try? JSONDecoder().decode([VPNProfile].self, from: data) else { return }
+        guard let url = try? configURL() else { return }
+        repairConfigPermissions(at: url)
+        guard let data = try? Data(contentsOf: url) else { return }
+        guard var configs = try? JSONDecoder().decode([VPNProfile].self, from: data) else {
+            NSLog("VPNToris: configs.json could not be decoded; legacy credential migration skipped")
+            return
+        }
         var changed = false
+        var failed: Set<String> = []
         for index in configs.indices {
             if !configs[index].password.isEmpty {
-                ProfileKeychain.write(configs[index].password, profile: configs[index].name, field: "password")
-                configs[index].password = ""
-                changed = true
+                if ProfileKeychain.write(configs[index].password, profile: configs[index].name, field: "password") {
+                    configs[index].password = ""
+                    changed = true
+                } else {
+                    failed.insert(configs[index].name)
+                }
             }
             if configs[index].ipsec?.preSharedKey.isEmpty == false {
-                ProfileKeychain.write(configs[index].ipsec?.preSharedKey ?? "", profile: configs[index].name, field: "psk")
-                configs[index].ipsec?.preSharedKey = ""
-                changed = true
+                if ProfileKeychain.write(configs[index].ipsec?.preSharedKey ?? "", profile: configs[index].name, field: "psk") {
+                    configs[index].ipsec?.preSharedKey = ""
+                    changed = true
+                } else {
+                    failed.insert(configs[index].name)
+                }
             }
         }
-        if changed, let encoded = try? JSONEncoder.pretty.encode(configs) { try? encoded.write(to: url, options: .atomic) }
+        if changed {
+            do {
+                try writeConfigs(configs, to: url)
+            } catch {
+                NSLog("VPNToris: could not rewrite configs.json after credential migration: \(error.localizedDescription)")
+                failed.formUnion(configs.map(\.name))
+            }
+        }
+        if !failed.isEmpty {
+            let message = "VPN credentials for \(failed.sorted().joined(separator: ", ")) could not be moved to the Keychain and remain in configs.json. Re-save or delete these profiles to clear them."
+            NSLog("VPNToris: %@", message)
+            error = message
+        }
+    }
+
+    private func repairConfigPermissions(at url: URL) {
+        guard let attributes = try? FileManager.default.attributesOfItem(atPath: url.path),
+              let permissions = attributes[.posixPermissions] as? NSNumber else { return }
+        if permissions.uint16Value & 0o077 != 0 {
+            do {
+                try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: url.path)
+                NSLog("VPNToris: configs.json permissions repaired to 0600")
+            } catch {
+                NSLog("VPNToris: could not repair configs.json permissions: \(error.localizedDescription)")
+            }
+        }
     }
 
     func connectLaunchProfiles() async {

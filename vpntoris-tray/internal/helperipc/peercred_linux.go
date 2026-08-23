@@ -29,3 +29,6 @@ func peerCredentialsUID(connection net.Conn) (uint32, error) {
 	}
 	return cred.Uid, nil
 }
+func consoleOwnerUID() (uint32, error) {
+	return 0, fmt.Errorf("console owner lookup is not supported on linux")
+}

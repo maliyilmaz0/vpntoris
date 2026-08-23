@@ -7,12 +7,19 @@ plist=/Library/LaunchDaemons/com.vpntoris.native-helper.plist
 helper=/Library/PrivilegedHelperTools/com.vpntoris.native-helper
 engines="/Library/Application Support/VPNToris/Engines"
 
-console_uid=$(stat -f %u /dev/console 2>/dev/null || echo 501)
+console_uid=$(stat -f %u /dev/console 2>/dev/null || true)
+if [[ -z "$console_uid" || "$console_uid" == "0" ]]; then
+  echo "error: could not determine the console user uid; aborting so the helper is not pinned to the wrong user" >&2
+  exit 1
+fi
 
 /usr/bin/xattr -dr com.apple.quarantine "$helper" "$engines" 2>/dev/null || true
 
 if [[ -f $plist ]]; then
-  /usr/libexec/PlistBuddy -c "Set :ProgramArguments:2 $console_uid" "$plist" 2>/dev/null || true
+  if ! /usr/libexec/PlistBuddy -c "Set :ProgramArguments:2 $console_uid" "$plist"; then
+    echo "error: failed to record console uid $console_uid in $plist" >&2
+    exit 1
+  fi
   chown root:wheel "$plist" 2>/dev/null || true
   chmod 0644 "$plist" 2>/dev/null || true
 fi

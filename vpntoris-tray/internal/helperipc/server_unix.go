@@ -5,6 +5,7 @@ package helperipc
 import (
 	"bufio"
 	"encoding/json"
+	"errors"
 	"log"
 	"net"
 	"os"
@@ -12,6 +13,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 	"vpntoris-tray/internal/fortihelper"
 	"vpntoris-tray/internal/nativehelper"
 	"vpntoris-tray/internal/runtimepaths"
@@ -19,7 +21,7 @@ import (
 
 const AllowedUsersPath = "/etc/vpntoris/helper-users.conf"
 
-var warnAllowAllOnce sync.Once
+var warnDenyAllOnce sync.Once
 
 func ServeUnix(service *nativehelper.Service, paths runtimepaths.Paths, uid int) error {
 	socketPath := paths.HelperSocket
@@ -31,34 +33,33 @@ func ServeUnix(service *nativehelper.Service, paths runtimepaths.Paths, uid int)
 	if err != nil {
 		return err
 	}
-	if uid > 0 {
-		if err := os.Chown(socketPath, uid, -1); err != nil {
-			listener.Close()
-			return err
-		}
-		if err := os.Chmod(socketPath, 0660); err != nil {
-			listener.Close()
-			return err
-		}
-	} else {
-		if err := os.Chmod(socketPath, 0666); err != nil {
-			listener.Close()
-			return err
-		}
+	if err := os.Chmod(socketPath, 0666); err != nil {
+		listener.Close()
+		return err
 	}
+	backoff := 5 * time.Millisecond
 	for {
 		connection, err := listener.Accept()
 		if err != nil {
+			if errors.Is(err, net.ErrClosed) {
+				return nil
+			}
+			log.Printf("helper: accept failed: %v", err)
+			time.Sleep(backoff)
+			if backoff < time.Second {
+				backoff *= 2
+			}
 			continue
 		}
-		if uid == 0 && !peerAllowed(connection) {
+		backoff = 5 * time.Millisecond
+		if !peerAllowed(connection, uid) {
 			_ = connection.Close()
 			continue
 		}
 		go handle(service, connection)
 	}
 }
-func peerAllowed(connection net.Conn) bool {
+func peerAllowed(connection net.Conn, helperUID int) bool {
 	peerUID, err := peerCredentialsUID(connection)
 	if err != nil {
 		log.Printf("helper: rejecting connection, peer credentials unavailable: %v", err)
@@ -67,12 +68,22 @@ func peerAllowed(connection net.Conn) bool {
 	if peerUID == 0 {
 		return true
 	}
+	if helperUID > 0 {
+		if peerUID == uint32(helperUID) {
+			return true
+		}
+		if consoleUID, err := consoleOwnerUID(); err == nil && peerUID == consoleUID {
+			return true
+		}
+		log.Printf("helper: rejecting request from uid %d (not the console user)", peerUID)
+		return false
+	}
 	allowed, err := loadAllowedUsers()
 	if err != nil || len(allowed) == 0 {
-		warnAllowAllOnce.Do(func() {
-			log.Printf("helper: %s missing or empty; allowing all local users (install the package to restrict)", AllowedUsersPath)
+		warnDenyAllOnce.Do(func() {
+			log.Printf("helper: %s missing or empty; rejecting all non-root users (add desktop user uids to it, one per line)", AllowedUsersPath)
 		})
-		return true
+		return false
 	}
 	if !allowed[peerUID] {
 		log.Printf("helper: rejecting request from uid %d (not in %s)", peerUID, AllowedUsersPath)

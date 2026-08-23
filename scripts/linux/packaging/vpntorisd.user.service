@@ -1,11 +1,12 @@
 [Unit]
 Description=VPNToris local controller (user session)
-After=network.target
+After=graphical-session.target
+PartOf=graphical-session.target
 
 [Service]
 Type=simple
 ExecStart=/usr/lib/vpntoris/vpntorisd
-Restart=always
+Restart=on-failure
 RestartSec=2
 
 [Install]

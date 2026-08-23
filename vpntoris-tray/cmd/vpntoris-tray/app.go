@@ -21,11 +21,20 @@ type trayApp struct {
 	otpActive  sync.Map
 }
 type profileMenu struct {
-	root       *systray.MenuItem
-	name       string
-	connected  bool
-	lastTitle  string
-	stateKnown bool
+	root          *systray.MenuItem
+	connect       *systray.MenuItem
+	disconnect    *systray.MenuItem
+	otp           *systray.MenuItem
+	edit          *systray.MenuItem
+	delete        *systray.MenuItem
+	logs          *systray.MenuItem
+	name          string
+	connected     bool
+	needsOTP      bool
+	lastTitle     string
+	lastConnected bool
+	lastNeedsOTP  bool
+	stateKnown    bool
 }
 
 func newTrayApp() *trayApp {
@@ -40,7 +49,16 @@ func (app *trayApp) onReady() {
 	systray.SetTitle("VPNToris")
 	systray.SetTooltip("VPNToris")
 
-	openGUI := systray.AddMenuItem("Open VPNToris", "Open the VPNToris window")
+	app.status = systray.AddMenuItem("Status: starting…", "Controller status")
+	app.status.Disable()
+	if flatProfileMenu {
+		openGUI := systray.AddMenuItem("Open VPNToris", "Open the VPNToris window")
+		go func() {
+			for range openGUI.ClickedCh {
+				openMainWindow()
+			}
+		}()
+	}
 	systray.AddSeparator()
 	addProfile := systray.AddMenuItem("Add Profile…", "Create a new VPN profile")
 	refresh := systray.AddMenuItem("Refresh", "Reload profiles from the controller")
@@ -50,19 +68,15 @@ func (app *trayApp) onReady() {
 	systray.AddSeparator()
 	quit := systray.AddMenuItem("Quit", "Quit VPNToris")
 
-	go app.loop(openGUI, addProfile, refresh, reset, openDir, quit)
-
-	openMainWindow()
+	go app.loop(addProfile, refresh, reset, openDir, quit)
 }
 func (app *trayApp) onExit() {}
-func (app *trayApp) loop(openGUI, addProfile, refresh, reset, openDir, quit *systray.MenuItem) {
+func (app *trayApp) loop(addProfile, refresh, reset, openDir, quit *systray.MenuItem) {
 	ticker := time.NewTicker(2 * time.Second)
 	defer ticker.Stop()
 	app.refreshProfiles()
 	for {
 		select {
-		case <-openGUI.ClickedCh:
-			openMainWindow()
 		case <-addProfile.ClickedCh:
 			app.handleAddProfile()
 		case <-refresh.ClickedCh:
@@ -149,9 +163,53 @@ func (app *trayApp) ensureProfileMenu(profile trayclient.Profile) {
 	}
 	app.items[profile.Name] = item
 	name := profile.Name
+	if flatProfileMenu {
+		go func() {
+			for range item.root.ClickedCh {
+				app.handleToggle(name)
+			}
+		}()
+		return
+	}
+	item.connect = root.AddSubMenuItem("Connect", "Connect "+profile.Name)
+	item.disconnect = root.AddSubMenuItem("Disconnect", "Disconnect "+profile.Name)
+	item.otp = root.AddSubMenuItem("Submit OTP…", "Submit one-time password for "+profile.Name)
+	item.edit = root.AddSubMenuItem("Edit Profile…", "Edit "+profile.Name)
+	item.delete = root.AddSubMenuItem("Delete Profile…", "Delete "+profile.Name)
+	item.logs = root.AddSubMenuItem("View Logs…", "Show recent logs for "+profile.Name)
 	go func() {
-		for range item.root.ClickedCh {
-			app.handleToggle(name)
+		for range item.connect.ClickedCh {
+			app.handleConnect(name)
+		}
+	}()
+	go func() {
+		for range item.disconnect.ClickedCh {
+			if err := app.client.Disconnect(name); err != nil {
+				app.setStatus(name + ": " + err.Error())
+			} else {
+				app.setStatus(name + ": disconnected")
+			}
+			app.refreshProfiles()
+		}
+	}()
+	go func() {
+		for range item.otp.ClickedCh {
+			app.handleOTP(name)
+		}
+	}()
+	go func() {
+		for range item.edit.ClickedCh {
+			app.handleEditProfile(name)
+		}
+	}()
+	go func() {
+		for range item.delete.ClickedCh {
+			app.handleDeleteProfile(name)
+		}
+	}()
+	go func() {
+		for range item.logs.ClickedCh {
+			app.handleLogs(name)
 		}
 	}()
 }
@@ -160,6 +218,10 @@ func (app *trayApp) handleToggle(name string) {
 	item := app.items[name]
 	app.mu.Unlock()
 	if item == nil {
+		return
+	}
+	if item.needsOTP {
+		app.handleOTP(name)
 		return
 	}
 	if item.connected {
@@ -181,6 +243,7 @@ func (app *trayApp) updateProfileMenu(profile trayclient.Profile) {
 		return
 	}
 	item.connected = profile.Connected
+	item.needsOTP = profile.NeedsOTP
 	state := "disconnected"
 	if profile.Connected {
 		state = "connected"
@@ -195,6 +258,28 @@ func (app *trayApp) updateProfileMenu(profile trayclient.Profile) {
 	if !item.stateKnown || item.lastTitle != title {
 		item.lastTitle = title
 		item.root.SetTitle(title)
+	}
+	if flatProfileMenu {
+		item.stateKnown = true
+		return
+	}
+	if !item.stateKnown || item.lastConnected != profile.Connected {
+		item.lastConnected = profile.Connected
+		if profile.Connected {
+			item.connect.Disable()
+			item.disconnect.Enable()
+		} else {
+			item.connect.Enable()
+			item.disconnect.Disable()
+		}
+	}
+	if !item.stateKnown || item.lastNeedsOTP != profile.NeedsOTP {
+		item.lastNeedsOTP = profile.NeedsOTP
+		if profile.NeedsOTP {
+			item.otp.Enable()
+		} else {
+			item.otp.Disable()
+		}
 	}
 	item.stateKnown = true
 }
@@ -311,8 +396,6 @@ func (app *trayApp) handleConnect(name string) {
 	go func() {
 		if err := app.client.Connect(name, password, psk); err != nil {
 			app.setStatus(name + ": " + err.Error())
-		} else {
-			app.setStatus(name + ": connected")
 		}
 		app.refreshProfiles()
 	}()

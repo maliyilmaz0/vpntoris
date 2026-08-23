@@ -22,7 +22,7 @@ func (service *Service) startIPSecLocked(request fortihelper.Request) fortihelpe
 		return fortihelper.Response{State: "failed", Error: err.Error()}
 	}
 	logPath := service.paths.ProfileLog(request.Profile)
-	logFile, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0644)
+	logFile, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0640)
 	if err != nil {
 		_ = os.Remove(configPath)
 		return fortihelper.Response{State: "failed", Error: err.Error()}
@@ -120,7 +120,7 @@ func (service *Service) ensureIPSecDaemonLocked() error {
 		return err
 	}
 	logPath := filepath.Join(service.paths.LogDirectory, "ipsec-daemon.log")
-	logFile, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
+	logFile, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0640)
 	if err != nil {
 		return err
 	}

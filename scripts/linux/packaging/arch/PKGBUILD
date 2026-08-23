@@ -1,6 +1,5 @@
-# Maintainer: VPNToris <info@vpntoris.local>
 pkgname=vpntoris
-pkgver=2.1.0
+pkgver=2.1.4
 pkgrel=1
 pkgdesc="Multi-profile split-route corporate VPN client for macOS, Linux and Windows"
 arch=('x86_64' 'aarch64')
@@ -14,6 +13,9 @@ optdepends=(
 )
 makedepends=('go' 'git')
 options=('!strip')
+install=vpntoris.install
+source=("git+${url}.git#tag=v${pkgver}")
+sha256sums=('SKIP')
 
 build() {
   cd "$srcdir/vpntoris/vpntoris-tray"
@@ -63,4 +65,7 @@ package() {
   if [[ -f "$srcdir/vpntoris/assets/icons/vpntoris-128.png" ]]; then
     install -Dm644 "$srcdir/vpntoris/assets/icons/vpntoris-128.png" "$pkgdir/usr/share/pixmaps/vpntoris.png"
   fi
+
+  bash "$srcdir/vpntoris/scripts/linux/stage-engines.sh" \
+    "$pkgdir/var/lib/vpntoris/engines/linux-$target_arch" "$target_arch" "$srcdir"
 }

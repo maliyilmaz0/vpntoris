@@ -1,0 +1,38 @@
+record_desktop_user() {
+  local desktop_uid=""
+  if [[ -n "${SUDO_USER:-}" && "$SUDO_USER" != "root" ]]; then
+    desktop_uid=$(id -u "$SUDO_USER" 2>/dev/null || true)
+  fi
+  if [[ -z "$desktop_uid" ]] && command -v loginctl >/dev/null 2>&1; then
+    desktop_uid=$(loginctl list-sessions --no-legend 2>/dev/null | awk '{print $2}' | grep -E '^[0-9]+$' | head -1 || true)
+  fi
+  if [[ -n "$desktop_uid" ]]; then
+    mkdir -p /etc/vpntoris
+    touch /etc/vpntoris/helper-users.conf
+    grep -qx "$desktop_uid" /etc/vpntoris/helper-users.conf 2>/dev/null || echo "$desktop_uid" >> /etc/vpntoris/helper-users.conf
+    chmod 644 /etc/vpntoris/helper-users.conf
+  fi
+}
+
+post_install() {
+  chmod 755 /var/log/vpntoris /var/lib/vpntoris 2>/dev/null || true
+  record_desktop_user
+  systemctl daemon-reload
+  systemctl enable --now vpntoris-native.service 2>/dev/null || true
+  echo "VPNToris installed."
+  echo "  Helper:  systemctl status vpntoris-native.service"
+  echo "  Tray:    log into a desktop session (tray auto-starts), or run: vpntoris-tray"
+  echo "  Controller (user): systemctl --user enable --now vpntorisd.service"
+}
+
+post_upgrade() {
+  chmod 755 /var/log/vpntoris /var/lib/vpntoris 2>/dev/null || true
+  record_desktop_user
+  systemctl daemon-reload
+  systemctl try-restart vpntoris-native.service 2>/dev/null || true
+}
+
+post_remove() {
+  rm -f /etc/vpntoris/helper-users.conf
+  systemctl daemon-reload 2>/dev/null || true
+}

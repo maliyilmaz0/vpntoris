@@ -6,7 +6,6 @@ if [[ -z ${DBUS_SESSION_BUS_ADDRESS:-} && -n ${XDG_RUNTIME_DIR:-} && -S ${XDG_RU
   export DBUS_SESSION_BUS_ADDRESS="unix:path=${XDG_RUNTIME_DIR}/bus"
 fi
 
-# Ensure vpntorisd controller daemon is running before/with tray
 systemctl --user start vpntorisd.service 2>/dev/null || true
 
 wait_for_watcher() {
@@ -25,6 +24,8 @@ wait_for_watcher() {
 
 if ! wait_for_watcher; then
   echo "vpntoris-tray: StatusNotifierWatcher not available after 90s" >&2
+  echo "  GNOME: enable the bundled extension, then re-login:" >&2
+  echo "         gnome-extensions enable vpntoris-appindicator@vpntoris.local" >&2
 fi
 
 exec /usr/bin/vpntoris-tray "$@"

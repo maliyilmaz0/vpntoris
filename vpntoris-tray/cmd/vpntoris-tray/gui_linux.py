@@ -236,7 +236,7 @@ class CredentialsStore:
             res = subprocess.run(["secret-tool", "lookup", "service", "vpntoris", "profile", profile, "field", field],
                                  stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, timeout=2)
             if res.returncode == 0 and res.stdout.strip():
-                return res.stdout.decode("utf-8").strip()
+                return res.stdout.decode("utf-8").rstrip("\r\n")
         except Exception:
             pass
 
@@ -726,7 +726,7 @@ class PasswordPromptDialog(Gtk.Dialog):
         box.set_spacing(10)
         box.set_border_width(12)
 
-        lbl = Gtk.Label(label=f"Enter password for <b>{profile_name}</b>:", xalign=0, use_markup=True)
+        lbl = Gtk.Label(label=f"Enter password for <b>{GLib.markup_escape_text(profile_name)}</b>:", xalign=0, use_markup=True)
         box.pack_start(lbl, False, False, 0)
 
         self.entry = Gtk.Entry()
@@ -1021,6 +1021,7 @@ class VPNTorisMainWindow(Gtk.Window):
             otp_input_row = Gtk.Box(spacing=6)
             otp_entry = Gtk.Entry()
             otp_entry.set_placeholder_text("Enter 2FA / OTP code")
+            otp_entry.set_visibility(False)
             otp_entry.set_hexpand(True)
             otp_entry.set_activates_default(True)
 

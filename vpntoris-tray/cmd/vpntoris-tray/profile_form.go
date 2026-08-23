@@ -34,8 +34,17 @@ func editProfileForm(existing *trayclient.ProfileConfig) (trayclient.ProfileConf
 			}
 		}
 		if runtime.GOOS == "linux" {
-			if cfg, formErr := gtkProfileForm(base); formErr == nil {
+			cfg, formErr := gtkProfileForm(base)
+			if formErr == nil {
 				config, err = cfg, nil
+				return
+			}
+			if formErr.Error() == "profile form cancelled" || formErr.Error() == "cancelled" {
+				err = fmt.Errorf("profile form cancelled")
+				return
+			}
+			if formErr.Error() != "gtk not available" && !strings.Contains(formErr.Error(), "executable file not found") {
+				err = formErr
 				return
 			}
 		}
@@ -154,9 +163,12 @@ func gtkProfileForm(base trayclient.ProfileConfig) (trayclient.ProfileConfig, er
 	}
 	script := `#!/usr/bin/env python3
 import json, sys
-import gi
-gi.require_version("Gtk", "3.0")
-from gi.repository import Gtk, GLib
+try:
+    import gi
+    gi.require_version("Gtk", "3.0")
+    from gi.repository import Gtk, GLib
+except Exception:
+    sys.exit(127)
 
 raw = sys.stdin.read()
 try:
@@ -547,7 +559,10 @@ class Form(Gtk.Dialog):
         return cfg
 
 GLib.set_prgname("vpntoris-tray")
-form = Form()
+try:
+    form = Form()
+except Exception:
+    sys.exit(127)
 response = form.run()
 if response != Gtk.ResponseType.OK:
     form.destroy()
@@ -581,7 +596,23 @@ print(json.dumps(out))
 	}
 	out, err := cmd.Output()
 	if err != nil {
-		return trayclient.ProfileConfig{}, fmt.Errorf("profile form cancelled")
+		if exitErr, ok := err.(*exec.ExitError); ok {
+			switch exitErr.ExitCode() {
+			case 1, 2:
+				return trayclient.ProfileConfig{}, fmt.Errorf("profile form cancelled")
+			case 3:
+				errMsg := strings.TrimSpace(string(exitErr.Stderr))
+				if errMsg == "" {
+					errMsg = "invalid config file"
+				}
+				return trayclient.ProfileConfig{}, fmt.Errorf("%s", errMsg)
+			case 127:
+				return trayclient.ProfileConfig{}, fmt.Errorf("gtk not available")
+			default:
+				return trayclient.ProfileConfig{}, fmt.Errorf("gtk profile form failed: %w", err)
+			}
+		}
+		return trayclient.ProfileConfig{}, fmt.Errorf("gtk not available")
 	}
 	var config trayclient.ProfileConfig
 	if err := json.Unmarshal(out, &config); err != nil {

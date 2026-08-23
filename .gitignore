@@ -40,3 +40,5 @@ AGENT_PROJECT_GUIDE.md
 *.md
 !README.md
 VPNToris-Diagnostics-*/
+__pycache__/
+*.pyc

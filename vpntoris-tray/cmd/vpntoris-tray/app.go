@@ -18,6 +18,7 @@ type trayApp struct {
 	items      map[string]*profileMenu
 	status     *systray.MenuItem
 	lastStatus string
+	otpActive  sync.Map
 }
 type profileMenu struct {
 	root          *systray.MenuItem
@@ -27,6 +28,9 @@ type profileMenu struct {
 	edit          *systray.MenuItem
 	delete        *systray.MenuItem
 	logs          *systray.MenuItem
+	name          string
+	connected     bool
+	needsOTP      bool
 	lastTitle     string
 	lastConnected bool
 	lastNeedsOTP  bool
@@ -44,8 +48,17 @@ func (app *trayApp) onReady() {
 	systray.SetIcon(minimalPNG)
 	systray.SetTitle("VPNToris")
 	systray.SetTooltip("VPNToris")
+
 	app.status = systray.AddMenuItem("Status: starting…", "Controller status")
 	app.status.Disable()
+	if flatProfileMenu {
+		openGUI := systray.AddMenuItem("Open VPNToris", "Open the VPNToris window")
+		go func() {
+			for range openGUI.ClickedCh {
+				openMainWindow()
+			}
+		}()
+	}
 	systray.AddSeparator()
 	addProfile := systray.AddMenuItem("Add Profile…", "Create a new VPN profile")
 	refresh := systray.AddMenuItem("Refresh", "Reload profiles from the controller")
@@ -53,7 +66,8 @@ func (app *trayApp) onReady() {
 	systray.AddSeparator()
 	openDir := systray.AddMenuItem("Open Config Folder", "Open the local VPNToris config directory")
 	systray.AddSeparator()
-	quit := systray.AddMenuItem("Quit", "Quit VPNToris tray")
+	quit := systray.AddMenuItem("Quit", "Quit VPNToris")
+
 	go app.loop(addProfile, refresh, reset, openDir, quit)
 }
 func (app *trayApp) onExit() {}
@@ -110,6 +124,7 @@ func (app *trayApp) refreshProfiles() {
 	profiles, err := app.client.Profiles()
 	if err != nil {
 		app.setStatus("controller offline")
+		go ensureDaemonRunning()
 		return
 	}
 	sort.Slice(profiles, func(i, j int) bool { return profiles[i].Name < profiles[j].Name })
@@ -142,16 +157,26 @@ func (app *trayApp) ensureProfileMenu(profile trayclient.Profile) {
 	}
 	root := systray.AddMenuItem(profile.Name, profile.Host)
 	item := &profileMenu{
-		root:       root,
-		connect:    root.AddSubMenuItem("Connect", "Connect "+profile.Name),
-		disconnect: root.AddSubMenuItem("Disconnect", "Disconnect "+profile.Name),
-		otp:        root.AddSubMenuItem("Submit OTP…", "Submit one-time password for "+profile.Name),
-		edit:       root.AddSubMenuItem("Edit Profile…", "Edit "+profile.Name),
-		delete:     root.AddSubMenuItem("Delete Profile…", "Delete "+profile.Name),
-		logs:       root.AddSubMenuItem("View Logs…", "Show recent logs for "+profile.Name),
+		root:      root,
+		name:      profile.Name,
+		connected: profile.Connected,
 	}
 	app.items[profile.Name] = item
 	name := profile.Name
+	if flatProfileMenu {
+		go func() {
+			for range item.root.ClickedCh {
+				app.handleToggle(name)
+			}
+		}()
+		return
+	}
+	item.connect = root.AddSubMenuItem("Connect", "Connect "+profile.Name)
+	item.disconnect = root.AddSubMenuItem("Disconnect", "Disconnect "+profile.Name)
+	item.otp = root.AddSubMenuItem("Submit OTP…", "Submit one-time password for "+profile.Name)
+	item.edit = root.AddSubMenuItem("Edit Profile…", "Edit "+profile.Name)
+	item.delete = root.AddSubMenuItem("Delete Profile…", "Delete "+profile.Name)
+	item.logs = root.AddSubMenuItem("View Logs…", "Show recent logs for "+profile.Name)
 	go func() {
 		for range item.connect.ClickedCh {
 			app.handleConnect(name)
@@ -188,6 +213,28 @@ func (app *trayApp) ensureProfileMenu(profile trayclient.Profile) {
 		}
 	}()
 }
+func (app *trayApp) handleToggle(name string) {
+	app.mu.Lock()
+	item := app.items[name]
+	app.mu.Unlock()
+	if item == nil {
+		return
+	}
+	if item.needsOTP {
+		app.handleOTP(name)
+		return
+	}
+	if item.connected {
+		if err := app.client.Disconnect(name); err != nil {
+			app.setStatus(name + ": " + err.Error())
+		} else {
+			app.setStatus(name + ": disconnected")
+		}
+		app.refreshProfiles()
+	} else {
+		app.handleConnect(name)
+	}
+}
 func (app *trayApp) updateProfileMenu(profile trayclient.Profile) {
 	app.mu.Lock()
 	defer app.mu.Unlock()
@@ -195,6 +242,8 @@ func (app *trayApp) updateProfileMenu(profile trayclient.Profile) {
 	if item == nil {
 		return
 	}
+	item.connected = profile.Connected
+	item.needsOTP = profile.NeedsOTP
 	state := "disconnected"
 	if profile.Connected {
 		state = "connected"
@@ -209,6 +258,10 @@ func (app *trayApp) updateProfileMenu(profile trayclient.Profile) {
 	if !item.stateKnown || item.lastTitle != title {
 		item.lastTitle = title
 		item.root.SetTitle(title)
+	}
+	if flatProfileMenu {
+		item.stateKnown = true
+		return
 	}
 	if !item.stateKnown || item.lastConnected != profile.Connected {
 		item.lastConnected = profile.Connected
@@ -249,12 +302,9 @@ func (app *trayApp) handleEditProfile(name string) {
 	config, replace, err := editProfileForm(&existing)
 	if err != nil {
 		if err.Error() != "cancelled" && err.Error() != "profile form cancelled" {
-			app.setStatus("edit failed: " + err.Error())
+			app.setStatus(name + ": " + err.Error())
 		}
 		return
-	}
-	if replace == "" {
-		replace = name
 	}
 	app.persistAndSave(replace, config)
 }
@@ -311,12 +361,6 @@ func (app *trayApp) handleDeleteProfile(name string) {
 	if item, ok := app.items[name]; ok {
 		item.root.SetTitle("(deleted) " + name)
 		item.root.Disable()
-		item.connect.Disable()
-		item.disconnect.Disable()
-		item.otp.Disable()
-		item.edit.Disable()
-		item.delete.Disable()
-		item.logs.Disable()
 		item.root.Hide()
 		delete(app.items, name)
 	}
@@ -348,15 +392,21 @@ func (app *trayApp) handleConnect(name string) {
 		password = value
 		_ = app.store.Write(name, "password", password)
 	}
-	if err := app.client.Connect(name, password, psk); err != nil {
-		app.setStatus(name + ": " + err.Error())
-		return
-	}
-	app.setStatus(name + ": connecting")
-	app.refreshProfiles()
+	app.setStatus(name + ": connecting…")
+	go func() {
+		if err := app.client.Connect(name, password, psk); err != nil {
+			app.setStatus(name + ": " + err.Error())
+		}
+		app.refreshProfiles()
+	}()
 }
 func (app *trayApp) handleOTP(name string) {
-	otp, err := promptSecret("VPNToris OTP", "One-time password for "+name)
+	if _, loaded := app.otpActive.LoadOrStore(name, true); loaded {
+		return
+	}
+	defer app.otpActive.Delete(name)
+
+	otp, err := promptSecret("VPNToris OTP", "Enter 2FA / OTP code for "+name)
 	if err != nil || otp == "" {
 		app.setStatus(name + ": OTP cancelled")
 		return

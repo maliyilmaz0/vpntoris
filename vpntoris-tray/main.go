@@ -983,7 +983,9 @@ func handleProfilesGet(response http.ResponseWriter, request *http.Request) {
 		otpRequests.RLock()
 		needsOTP := otpRequests.names[config.Name]
 		otpRequests.RUnlock()
-		if nativeOpenVPNSupported(config) {
+		if nativeFortiSupported(config) {
+			needsOTP = nativeFortiNeedsOTP(config.Name)
+		} else if nativeOpenVPNSupported(config) {
 			needsOTP = nativeOpenVPNNeedsOTP(config.Name)
 		} else if nativeOpenConnectSupported(config) {
 			needsOTP = nativeOpenConnectNeedsOTP(config.Name)

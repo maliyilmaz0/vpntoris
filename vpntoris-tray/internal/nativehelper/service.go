@@ -323,7 +323,7 @@ func (service *Service) Start(request fortihelper.Request) fortihelper.Response 
 		current.input = nil
 		go service.manageOpenVPN(current)
 	}
-	if protocol == fortihelper.ProtocolOpenConnect && request.TwoFactor {
+	if (protocol == fortihelper.ProtocolOpenConnect || protocol == fortihelper.ProtocolFortiGateSSL) && request.TwoFactor {
 		current.state = "waiting-otp"
 	}
 	if request.OTP != "" {

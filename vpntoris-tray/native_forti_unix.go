@@ -24,6 +24,10 @@ func nativeHelperReady() bool {
 	info, err := os.Stat(runtimepaths.Current().HelperSocket)
 	return err == nil && info.Mode()&os.ModeSocket != 0
 }
+func nativeFortiNeedsOTP(name string) bool {
+	status, err := nativeFortiStatus(name)
+	return err == nil && status.State == "waiting-otp"
+}
 func nativeFortiConnect(config VPNConfig) error {
 	port, err := strconv.Atoi(config.Port)
 	if err != nil {
@@ -43,7 +47,7 @@ func nativeFortiConnect(config VPNConfig) error {
 	if err != nil {
 		return err
 	}
-	request := fortihelper.Request{Action: fortihelper.ActionStart, Profile: nativeProfileID(config.Name), Host: config.Host, Port: port, Username: config.User, Password: config.Password, TrustedCert: certificate, Routes: values, Domains: domains, DNSServers: dnsServers}
+	request := fortihelper.Request{Action: fortihelper.ActionStart, Profile: nativeProfileID(config.Name), Host: config.Host, Port: port, Username: config.User, Password: config.Password, TrustedCert: certificate, Routes: values, Domains: domains, DNSServers: dnsServers, TwoFactor: config.TwoFactor}
 	response, err := nativeFortiRequest(request)
 	request.Password = ""
 	if err != nil {

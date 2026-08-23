@@ -35,14 +35,23 @@ func runDialog(name string, args ...string) error {
 func desktopEnv() []string {
 	env := os.Environ()
 	hasDisplay := false
+	hasDBus := false
 	for _, item := range env {
 		if strings.HasPrefix(item, "DISPLAY=") || strings.HasPrefix(item, "WAYLAND_DISPLAY=") {
 			hasDisplay = true
-			break
+		}
+		if strings.HasPrefix(item, "DBUS_SESSION_BUS_ADDRESS=") {
+			hasDBus = true
 		}
 	}
 	if !hasDisplay {
 		env = append(env, "DISPLAY=:0")
+	}
+	if !hasDBus && os.Getenv("XDG_RUNTIME_DIR") != "" {
+		bus := filepath.Join(os.Getenv("XDG_RUNTIME_DIR"), "bus")
+		if _, err := os.Stat(bus); err == nil {
+			env = append(env, "DBUS_SESSION_BUS_ADDRESS=unix:path="+bus)
+		}
 	}
 	return env
 }

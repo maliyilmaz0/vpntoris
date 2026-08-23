@@ -45,7 +45,7 @@ func newTrayApp() *trayApp {
 	}
 }
 func (app *trayApp) onReady() {
-	systray.SetIcon(minimalPNG)
+	systray.SetIcon(trayIcon)
 	systray.SetTitle("VPNToris")
 	systray.SetTooltip("VPNToris")
 

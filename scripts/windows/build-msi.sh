@@ -190,6 +190,7 @@ fi
 
 echo "[5/5] wixl packaging..."
 cp -f "$STAGE"/*.exe "$HEAT_DIR/"
+cp -f "$ROOT_DIR/assets/icons/vpntoris.ico" "$HEAT_DIR/"
 cd "$HEAT_DIR"
 
 wixl -v -a x64 \

@@ -1,5 +1,5 @@
 pkgname=vpntoris
-pkgver=2.1.4
+pkgver=2.1.5
 pkgrel=1
 pkgdesc="Multi-profile split-route corporate VPN client for macOS, Linux and Windows"
 arch=('x86_64' 'aarch64')

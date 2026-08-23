@@ -3,7 +3,7 @@ set -euo pipefail
 
 SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 ROOT_DIR=$(cd "$SCRIPT_DIR/../.." && pwd)
-VERSION=${VERSION:-2.1.4}
+VERSION=${VERSION:-2.1.5}
 GOARCH=${GOARCH:-amd64}
 
 record_desktop_user() {

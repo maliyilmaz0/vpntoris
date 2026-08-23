@@ -17,7 +17,7 @@ gi.require_version("Gdk", "3.0")
 from gi.repository import Gtk, Gdk, GLib, Pango
 
 API_BASE = "http://127.0.0.1:17984"
-VERSION = "2.1.4"
+VERSION = "2.1.5"
 
 TYPE_LABELS = {
     "openfortivpn": "FortiGate SSL VPN",
